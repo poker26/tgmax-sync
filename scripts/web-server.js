@@ -54,6 +54,22 @@ async function requireAuthenticatedUser(request, response, next) {
   }
 }
 
+async function attachEnvTelegramSessionForUserIfMissing(userId) {
+  const envSessionString = String(config.telegram.session ?? "").trim();
+  if (!envSessionString) return false;
+
+  const existingTelegramAccount = await loadTelegramAccountByUserId(userId);
+  if (existingTelegramAccount?.session_string) {
+    return false;
+  }
+
+  await upsertTelegramAccount({
+    userId,
+    sessionString: envSessionString,
+  });
+  return true;
+}
+
 function createApiServer() {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
@@ -108,7 +124,15 @@ function createApiServer() {
         sendError(response, 401, "Invalid credentials.");
         return;
       }
-      response.status(200).json({ ok: true, token: loginResult.token, user: loginResult.user });
+      const sessionAttachedFromEnv = await attachEnvTelegramSessionForUserIfMissing(
+        loginResult.user.id
+      );
+      response.status(200).json({
+        ok: true,
+        token: loginResult.token,
+        user: loginResult.user,
+        sessionAttachedFromEnv,
+      });
     } catch (error) {
       sendError(response, 500, error.message);
     }
@@ -124,7 +148,10 @@ function createApiServer() {
   });
 
   app.get("/api/me", requireAuthenticatedUser, async (request, response) => {
-    response.status(200).json({ ok: true, user: request.auth.user });
+    const sessionAttachedFromEnv = await attachEnvTelegramSessionForUserIfMissing(
+      request.auth.user.id
+    );
+    response.status(200).json({ ok: true, user: request.auth.user, sessionAttachedFromEnv });
   });
 
   app.get("/api/telegram/session", requireAuthenticatedUser, async (request, response) => {
@@ -134,6 +161,7 @@ function createApiServer() {
         ok: true,
         hasSession: Boolean(telegramAccount?.session_string),
         status: telegramAccount?.status ?? "missing",
+        source: telegramAccount?.session_string ? "stored_for_user" : "missing",
       });
     } catch (error) {
       sendError(response, 500, error.message);

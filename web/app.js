@@ -83,10 +83,14 @@ document.getElementById("loginButton").addEventListener("click", async () => {
       body: JSON.stringify({ email, password }),
     });
     setToken(responseBody.token);
-    authOutput.textContent = "Login successful.";
+    authOutput.textContent = responseBody.sessionAttachedFromEnv
+      ? "Login successful. Telegram connected automatically."
+      : "Login successful.";
     renderAuthState(true);
     await loadChannels();
     await loadLogs();
+    const sessionBody = await apiRequest("/api/telegram/session", { method: "GET" });
+    sessionOutput.textContent = JSON.stringify(sessionBody, null, 2);
   } catch (error) {
     authOutput.textContent = error.message;
   }
@@ -104,19 +108,6 @@ document.getElementById("registerButton").addEventListener("click", async () => 
     await loadBootstrapStatus();
   } catch (error) {
     authOutput.textContent = error.message;
-  }
-});
-
-document.getElementById("saveSessionButton").addEventListener("click", async () => {
-  try {
-    const sessionString = document.getElementById("tgSessionInput").value;
-    await apiRequest("/api/telegram/session", {
-      method: "POST",
-      body: JSON.stringify({ sessionString }),
-    });
-    sessionOutput.textContent = "Session saved.";
-  } catch (error) {
-    sessionOutput.textContent = error.message;
   }
 });
 
