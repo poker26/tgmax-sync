@@ -1,0 +1,21 @@
+{
+  "name": "tgmax-sync",
+  "version": "0.1.0",
+  "description": "Near-realtime Telegram to Max synchronization worker",
+  "type": "module",
+  "main": "scripts/sync-worker.js",
+  "scripts": {
+    "migrate": "node scripts/run-migrations.js",
+    "sync:worker": "node scripts/sync-worker.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.50.0",
+    "dotenv": "^16.4.5",
+    "minio": "^8.0.1",
+    "pg": "^8.13.0",
+    "telegram": "^2.26.22"
+  }
+}
