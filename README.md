@@ -6,23 +6,23 @@ Multi-tenant сервис синхронизации `Telegram (master) -> Max (
 
 - simple auth: `email/password` + сессии `Bearer` токеном;
 - строгая tenant-изоляция на уровне API и repository (`user_id` в каждом запросе);
-- per-user Telegram session (`telegram_accounts`);
+- per-user Telegram session (`tg_telegram_accounts`);
 - web UI: Login, My Channels, Logs/Status;
-- shared queue архитектура: `sync_jobs` + единый scheduler + pooled workers;
+- shared queue архитектура: `tg_sync_jobs` + единый scheduler + pooled workers;
 - защита от смешения каналов: job содержит только `channel_sync_config_id`, конфиг перечитывается из БД с проверкой владельца.
 
 ## Миграции и таблицы
 
 Новая migration `004_multi_tenant_core.sql` добавляет:
 
-- `users`
-- `user_sessions`
-- `telegram_accounts`
-- `channel_sync_configs`
-- `sync_jobs`
-- `sync_job_logs`
-- `channel_sync_state`
-- `channel_message_map`
+- `tg_users`
+- `tg_user_sessions`
+- `tg_telegram_accounts`
+- `tg_channel_sync_configs`
+- `tg_sync_jobs`
+- `tg_sync_job_logs`
+- `tg_channel_sync_state`
+- `tg_channel_message_map`
 
 ## Быстрый старт (dev/prod шаги)
 
@@ -43,7 +43,7 @@ Multi-tenant сервис синхронизации `Telegram (master) -> Max (
 ## Принцип tenant-safety
 
 - все защищенные API endpoint используют `TenantGuard` через bearer auth;
-- в `sync_jobs` маршрутизация идет через `channel_sync_config_id`, не через "свободные" channel ids;
+- в `tg_sync_jobs` маршрутизация идет через `channel_sync_config_id`, не через "свободные" channel ids;
 - worker перед исполнением проверяет связку `job.user_id == config.user_id == telegram_account.user_id`;
 - логи и джобы в UI фильтруются только по `auth.user_id`.
 

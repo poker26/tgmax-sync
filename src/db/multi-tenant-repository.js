@@ -1,8 +1,17 @@
 import { supabase } from "./supabase.js";
 
+const TABLE_USERS = "tg_users";
+const TABLE_USER_SESSIONS = "tg_user_sessions";
+const TABLE_TELEGRAM_ACCOUNTS = "tg_telegram_accounts";
+const TABLE_CHANNEL_CONFIGS = "tg_channel_sync_configs";
+const TABLE_SYNC_JOBS = "tg_sync_jobs";
+const TABLE_SYNC_JOB_LOGS = "tg_sync_job_logs";
+const TABLE_SYNC_STATE = "tg_channel_sync_state";
+const TABLE_MESSAGE_MAP = "tg_channel_message_map";
+
 export async function createUser({ email, passwordHash }) {
   const { data, error } = await supabase
-    .from("users")
+    .from(TABLE_USERS)
     .insert({
       email: String(email).trim().toLowerCase(),
       password_hash: passwordHash,
@@ -16,7 +25,7 @@ export async function createUser({ email, passwordHash }) {
 
 export async function countUsers() {
   const { count, error } = await supabase
-    .from("users")
+    .from(TABLE_USERS)
     .select("id", { count: "exact", head: true });
   if (error) throw new Error(`users count failed: ${error.message}`);
   return Number(count ?? 0);
@@ -24,7 +33,7 @@ export async function countUsers() {
 
 export async function loadUserByEmail(email) {
   const { data, error } = await supabase
-    .from("users")
+    .from(TABLE_USERS)
     .select("id, email, password_hash, status")
     .eq("email", String(email).trim().toLowerCase())
     .maybeSingle();
@@ -34,7 +43,7 @@ export async function loadUserByEmail(email) {
 
 export async function createUserSession({ userId, tokenHash, expiresAt, userAgent = "", ipAddress = "" }) {
   const { data, error } = await supabase
-    .from("user_sessions")
+    .from(TABLE_USER_SESSIONS)
     .insert({
       user_id: userId,
       token_hash: tokenHash,
@@ -51,7 +60,7 @@ export async function createUserSession({ userId, tokenHash, expiresAt, userAgen
 export async function loadUserBySessionTokenHash(tokenHash) {
   const nowIso = new Date().toISOString();
   const { data, error } = await supabase
-    .from("user_sessions")
+    .from(TABLE_USER_SESSIONS)
     .select("id, user_id, expires_at, users(id, email, status)")
     .eq("token_hash", tokenHash)
     .gt("expires_at", nowIso)
@@ -61,12 +70,12 @@ export async function loadUserBySessionTokenHash(tokenHash) {
 }
 
 export async function deleteSessionByTokenHash(tokenHash) {
-  const { error } = await supabase.from("user_sessions").delete().eq("token_hash", tokenHash);
+  const { error } = await supabase.from(TABLE_USER_SESSIONS).delete().eq("token_hash", tokenHash);
   if (error) throw new Error(`user_sessions delete failed: ${error.message}`);
 }
 
 export async function upsertTelegramAccount({ userId, sessionString }) {
-  const { error } = await supabase.from("telegram_accounts").upsert(
+  const { error } = await supabase.from(TABLE_TELEGRAM_ACCOUNTS).upsert(
     {
       user_id: userId,
       session_string: sessionString,
@@ -80,7 +89,7 @@ export async function upsertTelegramAccount({ userId, sessionString }) {
 
 export async function loadTelegramAccountByUserId(userId) {
   const { data, error } = await supabase
-    .from("telegram_accounts")
+    .from(TABLE_TELEGRAM_ACCOUNTS)
     .select("id, user_id, session_string, status")
     .eq("user_id", userId)
     .maybeSingle();
@@ -96,7 +105,7 @@ export async function createChannelSyncConfig({
   pollLimit = 200,
 }) {
   const { data, error } = await supabase
-    .from("channel_sync_configs")
+    .from(TABLE_CHANNEL_CONFIGS)
     .insert({
       user_id: userId,
       source_channel_id: sourceChannelId,
@@ -113,7 +122,7 @@ export async function createChannelSyncConfig({
 
 export async function listChannelSyncConfigsByUserId(userId) {
   const { data, error } = await supabase
-    .from("channel_sync_configs")
+    .from(TABLE_CHANNEL_CONFIGS)
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
@@ -123,7 +132,7 @@ export async function listChannelSyncConfigsByUserId(userId) {
 
 export async function loadChannelSyncConfigByIdForUser(userId, configId) {
   const { data, error } = await supabase
-    .from("channel_sync_configs")
+    .from(TABLE_CHANNEL_CONFIGS)
     .select("*")
     .eq("id", configId)
     .eq("user_id", userId)
@@ -134,7 +143,7 @@ export async function loadChannelSyncConfigByIdForUser(userId, configId) {
 
 export async function updateChannelSyncConfigStatus({ userId, configId, status }) {
   const { data, error } = await supabase
-    .from("channel_sync_configs")
+    .from(TABLE_CHANNEL_CONFIGS)
     .update({
       status,
       updated_at: new Date().toISOString(),
@@ -149,7 +158,7 @@ export async function updateChannelSyncConfigStatus({ userId, configId, status }
 
 export async function deleteChannelSyncConfig({ userId, configId }) {
   const { error } = await supabase
-    .from("channel_sync_configs")
+    .from(TABLE_CHANNEL_CONFIGS)
     .delete()
     .eq("id", configId)
     .eq("user_id", userId);
@@ -158,7 +167,7 @@ export async function deleteChannelSyncConfig({ userId, configId }) {
 
 export async function listActiveChannelSyncConfigs() {
   const { data, error } = await supabase
-    .from("channel_sync_configs")
+    .from(TABLE_CHANNEL_CONFIGS)
     .select("*")
     .eq("status", "active");
   if (error) throw new Error(`channel_sync_configs active list failed: ${error.message}`);
@@ -167,7 +176,7 @@ export async function listActiveChannelSyncConfigs() {
 
 export async function hasPendingOrProcessingJob(configId) {
   const { count, error } = await supabase
-    .from("sync_jobs")
+    .from(TABLE_SYNC_JOBS)
     .select("id", { head: true, count: "exact" })
     .eq("channel_sync_config_id", configId)
     .in("status", ["pending", "processing"]);
@@ -177,7 +186,7 @@ export async function hasPendingOrProcessingJob(configId) {
 
 export async function enqueueSyncJob({ userId, configId }) {
   const { data, error } = await supabase
-    .from("sync_jobs")
+    .from(TABLE_SYNC_JOBS)
     .insert({
       user_id: userId,
       channel_sync_config_id: configId,
@@ -192,7 +201,7 @@ export async function enqueueSyncJob({ userId, configId }) {
 
 export async function claimPendingJobs({ limit }) {
   const { data, error } = await supabase
-    .from("sync_jobs")
+    .from(TABLE_SYNC_JOBS)
     .select("*")
     .eq("status", "pending")
     .or(`next_retry_at.is.null,next_retry_at.lte.${new Date().toISOString()}`)
@@ -203,7 +212,7 @@ export async function claimPendingJobs({ limit }) {
   const claimedJobs = [];
   for (const pendingJob of data ?? []) {
     const { data: updatedRows, error: updateError } = await supabase
-      .from("sync_jobs")
+      .from(TABLE_SYNC_JOBS)
       .update({
         status: "processing",
         started_at: new Date().toISOString(),
@@ -222,7 +231,7 @@ export async function claimPendingJobs({ limit }) {
 
 export async function markSyncJobDone(jobId) {
   const { error } = await supabase
-    .from("sync_jobs")
+    .from(TABLE_SYNC_JOBS)
     .update({
       status: "done",
       finished_at: new Date().toISOString(),
@@ -237,7 +246,7 @@ export async function markSyncJobFailed({ jobId, attemptCount, maxAttempts, erro
   const isDeadLetter = attemptCount >= maxAttempts;
   const retryAt = new Date(Date.now() + Math.min(60000 * attemptCount, 300000)).toISOString();
   const { error } = await supabase
-    .from("sync_jobs")
+    .from(TABLE_SYNC_JOBS)
     .update({
       status: isDeadLetter ? "error" : "pending",
       attempt_count: attemptCount,
@@ -258,7 +267,7 @@ export async function addSyncJobLog({
   message,
   details = {},
 }) {
-  const { error } = await supabase.from("sync_job_logs").insert({
+  const { error } = await supabase.from(TABLE_SYNC_JOB_LOGS).insert({
     user_id: userId,
     channel_sync_config_id: configId,
     sync_job_id: jobId,
@@ -271,7 +280,7 @@ export async function addSyncJobLog({
 
 export async function listSyncJobLogsByUser({ userId, configId = null, limit = 200 }) {
   let query = supabase
-    .from("sync_job_logs")
+    .from(TABLE_SYNC_JOB_LOGS)
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
@@ -286,7 +295,7 @@ export async function listSyncJobLogsByUser({ userId, configId = null, limit = 2
 
 export async function listSyncJobsByUser({ userId, configId = null, limit = 100 }) {
   let query = supabase
-    .from("sync_jobs")
+    .from(TABLE_SYNC_JOBS)
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
@@ -301,7 +310,7 @@ export async function listSyncJobsByUser({ userId, configId = null, limit = 100 
 
 export async function loadOrCreateChannelSyncState({ userId, configId }) {
   const { data, error } = await supabase
-    .from("channel_sync_state")
+    .from(TABLE_SYNC_STATE)
     .select("*")
     .eq("user_id", userId)
     .eq("channel_sync_config_id", configId)
@@ -310,7 +319,7 @@ export async function loadOrCreateChannelSyncState({ userId, configId }) {
   if (data) return data;
 
   const { data: inserted, error: insertError } = await supabase
-    .from("channel_sync_state")
+    .from(TABLE_SYNC_STATE)
     .insert({
       user_id: userId,
       channel_sync_config_id: configId,
@@ -325,7 +334,7 @@ export async function loadOrCreateChannelSyncState({ userId, configId }) {
 
 export async function updateChannelSyncState({ userId, configId, lastMessageId }) {
   const { error } = await supabase
-    .from("channel_sync_state")
+    .from(TABLE_SYNC_STATE)
     .update({
       last_message_id: lastMessageId,
       last_scan_at: new Date().toISOString(),
@@ -338,7 +347,7 @@ export async function updateChannelSyncState({ userId, configId, lastMessageId }
 
 export async function loadMappedMessage({ userId, configId, sourceMessageId }) {
   const { data, error } = await supabase
-    .from("channel_message_map")
+    .from(TABLE_MESSAGE_MAP)
     .select("*")
     .eq("user_id", userId)
     .eq("channel_sync_config_id", configId)
@@ -355,7 +364,7 @@ export async function upsertMappedMessage({
   targetMessageId,
   sourceHash,
 }) {
-  const { error } = await supabase.from("channel_message_map").upsert(
+  const { error } = await supabase.from(TABLE_MESSAGE_MAP).upsert(
     {
       user_id: userId,
       channel_sync_config_id: configId,

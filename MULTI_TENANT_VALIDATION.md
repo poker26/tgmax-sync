@@ -19,15 +19,15 @@
 
 ```sql
 select user_id, count(*) as channel_count
-from channel_sync_configs
+from tg_channel_sync_configs
 group by user_id
 order by user_id;
 ```
 
 ```sql
 select j.id, j.user_id as job_user_id, c.user_id as config_user_id
-from sync_jobs j
-join channel_sync_configs c on c.id = j.channel_sync_config_id
+from tg_sync_jobs j
+join tg_channel_sync_configs c on c.id = j.channel_sync_config_id
 where j.user_id <> c.user_id;
 ```
 
@@ -40,4 +40,4 @@ where j.user_id <> c.user_id;
 - `job.user_id == channel_sync_config.user_id`
 - `job.user_id == telegram_account.user_id`
 
-При нарушении воркер переводит job в `error` и пишет запись в `sync_job_logs`.
+При нарушении воркер переводит job в `error` и пишет запись в `tg_sync_job_logs`.

@@ -7,7 +7,6 @@
 - Синхронизация: `Telegram (master)` -> `MAX (mirror)`.
 - Режим: near-realtime polling, управление через web UI.
 - Целевые SLA:
-  - новые посты в MAX: до 60 сек;
 - новые посты в MAX: до 60 сек;
 - отсутствие зависших `pending/processing` джоб дольше 10 минут.
 
@@ -31,14 +30,14 @@ npm run migrate
 
 После миграции должны существовать таблицы:
 
-- `users`
-- `user_sessions`
-- `telegram_accounts`
-- `channel_sync_configs`
-- `sync_jobs`
-- `sync_job_logs`
-- `channel_sync_state`
-- `channel_message_map`
+- `tg_users`
+- `tg_user_sessions`
+- `tg_telegram_accounts`
+- `tg_channel_sync_configs`
+- `tg_sync_jobs`
+- `tg_sync_job_logs`
+- `tg_channel_sync_state`
+- `tg_channel_message_map`
 
 ## 3) Настройка `.env` для web+engine
 
@@ -87,11 +86,11 @@ pm2 logs tgmax-sync-web --lines 100
 
 ## 6) Операционные SQL проверки
 
-Глубина очереди `sync_jobs`:
+Глубина очереди `tg_sync_jobs`:
 
 ```sql
 select status, count(*) as count
-from sync_jobs
+from tg_sync_jobs
 group by status
 order by status;
 ```
@@ -100,7 +99,7 @@ order by status;
 
 ```sql
 select id, user_id, channel_sync_config_id, started_at, attempt_count
-from sync_jobs
+from tg_sync_jobs
 where status = 'processing'
   and started_at < now() - interval '10 minutes'
 order by started_at asc;
@@ -110,7 +109,7 @@ order by started_at asc;
 
 ```sql
 select id, user_id, channel_sync_config_id, attempt_count, error_message, updated_at
-from sync_jobs
+from tg_sync_jobs
 where status = 'error'
 order by updated_at desc
 limit 100;
