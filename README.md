@@ -19,12 +19,18 @@
 3. Прогнать миграции:
    - `npm run migrate`
 4. Запустить воркер:
-   - `npm run sync:worker`
+   - `npm run sync:worker -- --source-channel @your_channel --max-chat-id -123456789`
+
+## Параметры запуска (обязательные)
+
+- `--source-channel @yourchannel`
+- `--max-chat-id -123456789`
+
+Каналы не читаются из `.env` и должны задаваться явно при запуске
+(или как `args` в `ecosystem.config.cjs`).
 
 ## Основные переменные
 
-- `SYNC_SOURCE_CHANNEL=@yourchannel`
-- `MAX_TARGET_CHAT_ID=-123456789`
 - `SYNC_POLL_INTERVAL_MS=30000`
 - `SYNC_POLL_LIMIT=200`
 - `SYNC_EVENT_BATCH_SIZE=50`

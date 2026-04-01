@@ -7,17 +7,20 @@ import { collectSyncEvents } from "../src/sync/collector.js";
 import { dispatchSyncEvents } from "../src/sync/dispatcher.js";
 import { acquireDistributedLock, releaseDistributedLock } from "../src/sync/repository.js";
 
-const sourceChannelId = config.sync.sourceChannel;
-const targetChatId = config.max.targetChatId;
+const cliArgs = process.argv.slice(2);
+const sourceChannelFlagIndex = cliArgs.indexOf("--source-channel");
+const sourceChannelId = sourceChannelFlagIndex >= 0 ? cliArgs[sourceChannelFlagIndex + 1] : "";
+const maxChatIdFlagIndex = cliArgs.indexOf("--max-chat-id");
+const targetChatId = maxChatIdFlagIndex >= 0 ? cliArgs[maxChatIdFlagIndex + 1] : "";
 const workerOwnerId = randomUUID();
 
-if (!sourceChannelId) {
-  console.error("SYNC_SOURCE_CHANNEL is required.");
+if (!sourceChannelId || !String(sourceChannelId).trim().startsWith("@")) {
+  console.error("Explicit --source-channel @channel is required.");
   process.exit(1);
 }
 
 if (!targetChatId || !/^-?\d+$/.test(String(targetChatId).trim())) {
-  console.error("MAX_TARGET_CHAT_ID is required and must be numeric.");
+  console.error("Explicit --max-chat-id <numeric> is required.");
   process.exit(1);
 }
 

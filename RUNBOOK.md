@@ -42,8 +42,6 @@ npm run migrate
 Минимальный блок:
 
 ```env
-SYNC_SOURCE_CHANNEL=@your_channel
-MAX_TARGET_CHAT_ID=-123456789
 MAX_BOT_TOKEN=...
 MAX_API_BASE_URL=https://platform-api.max.ru
 
@@ -56,6 +54,13 @@ SYNC_STALE_PROCESSING_MS=600000
 SYNC_MAX_ATTEMPTS=8
 SYNC_RETRY_BASE_DELAY_MS=2000
 SYNC_DELETE_FALLBACK_MODE=tombstone
+```
+
+Каналы source/target не задаются в `.env`.
+Передаются явно аргументами запуска:
+
+```bash
+npm run sync:worker -- --source-channel @your_channel --max-chat-id -123456789
 ```
 
 ## 4) Запуск в PM2

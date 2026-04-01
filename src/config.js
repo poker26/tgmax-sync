@@ -29,12 +29,10 @@ export const config = {
   },
   max: {
     botToken: optional("MAX_BOT_TOKEN"),
-    targetChatId: optional("MAX_TARGET_CHAT_ID"),
     apiBaseUrl: optional("MAX_API_BASE_URL", "https://platform-api.max.ru"),
     postDelayMs: parseInt(optional("MAX_POST_DELAY_MS", "5000"), 10),
   },
   sync: {
-    sourceChannel: optional("SYNC_SOURCE_CHANNEL"),
     pollIntervalMs: parseInt(optional("SYNC_POLL_INTERVAL_MS", "30000"), 10),
     pollLimit: parseInt(optional("SYNC_POLL_LIMIT", "200"), 10),
     eventBatchSize: parseInt(optional("SYNC_EVENT_BATCH_SIZE", "50"), 10),
