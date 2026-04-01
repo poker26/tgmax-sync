@@ -6,14 +6,17 @@
   "main": "scripts/sync-worker.js",
   "scripts": {
     "migrate": "node scripts/run-migrations.js",
-    "sync:worker": "node scripts/sync-worker.js"
+    "sync:worker": "node scripts/sync-worker.js",
+    "web": "node scripts/web-server.js"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.50.0",
+    "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
+    "express": "^4.21.0",
     "minio": "^8.0.1",
     "pg": "^8.13.0",
     "telegram": "^2.26.22"

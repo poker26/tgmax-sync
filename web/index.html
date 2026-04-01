@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tgmax-sync</title>
+    <style>
+      body { font-family: sans-serif; margin: 20px; max-width: 1000px; }
+      input, button, textarea, select { margin: 4px 0; padding: 8px; width: 100%; }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .panel { border: 1px solid #ddd; padding: 12px; margin-bottom: 12px; border-radius: 8px; }
+      .hidden { display: none; }
+      pre { background: #f7f7f7; padding: 8px; overflow-x: auto; }
+      .channel { border: 1px solid #eee; padding: 8px; margin-bottom: 8px; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <h2>tgmax-sync</h2>
+
+    <div id="authPanel" class="panel">
+      <h3>Login</h3>
+      <div id="bootstrapHint"></div>
+      <div class="row">
+        <div>
+          <label>Email</label>
+          <input id="emailInput" type="email" />
+        </div>
+        <div>
+          <label>Password</label>
+          <input id="passwordInput" type="password" />
+        </div>
+      </div>
+      <button id="loginButton">Login</button>
+      <button id="registerButton">Register first user</button>
+      <pre id="authOutput"></pre>
+    </div>
+
+    <div id="appPanel" class="hidden">
+      <div class="panel">
+        <h3>Telegram session</h3>
+        <textarea id="tgSessionInput" rows="4" placeholder="Paste TG session string"></textarea>
+        <button id="saveSessionButton">Save TG session</button>
+        <button id="checkSessionButton">Check session status</button>
+        <pre id="sessionOutput"></pre>
+      </div>
+
+      <div class="panel">
+        <h3>Add sync channel</h3>
+        <div class="row">
+          <div>
+            <label>Source TG channel</label>
+            <input id="sourceChannelInput" placeholder="@channel" />
+          </div>
+          <div>
+            <label>Target MAX chat id</label>
+            <input id="targetChatInput" placeholder="-1234567890" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Poll interval ms</label>
+            <input id="pollIntervalInput" value="30000" />
+          </div>
+          <div>
+            <label>Poll limit</label>
+            <input id="pollLimitInput" value="200" />
+          </div>
+        </div>
+        <button id="addChannelButton">Add channel</button>
+      </div>
+
+      <div class="panel">
+        <h3>My channels</h3>
+        <button id="refreshChannelsButton">Refresh channels</button>
+        <div id="channelsContainer"></div>
+      </div>
+
+      <div class="panel">
+        <h3>Logs</h3>
+        <div class="row">
+          <div>
+            <label>Filter by channel</label>
+            <select id="logsChannelFilter">
+              <option value="">All channels</option>
+            </select>
+          </div>
+          <div>
+            <label>Limit</label>
+            <input id="logsLimitInput" value="200" />
+          </div>
+        </div>
+        <button id="refreshLogsButton">Refresh logs</button>
+        <pre id="logsOutput"></pre>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+  </html>

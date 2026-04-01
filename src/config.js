@@ -42,6 +42,12 @@ export const config = {
     maxAttempts: parseInt(optional("SYNC_MAX_ATTEMPTS", "8"), 10),
     retryBaseDelayMs: parseInt(optional("SYNC_RETRY_BASE_DELAY_MS", "2000"), 10),
     deleteFallbackMode: optional("SYNC_DELETE_FALLBACK_MODE", "tombstone"),
+    schedulerIntervalMs: parseInt(optional("SYNC_SCHEDULER_INTERVAL_MS", "10000"), 10),
+    workerConcurrency: parseInt(optional("SYNC_WORKER_CONCURRENCY", "2"), 10),
+  },
+  web: {
+    port: parseInt(optional("WEB_PORT", "3030"), 10),
+    sessionTtlHours: parseInt(optional("WEB_SESSION_TTL_HOURS", "72"), 10),
   },
 };
 

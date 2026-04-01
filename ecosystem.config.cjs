@@ -1,14 +1,14 @@
 module.exports = {
   apps: [
     {
-      name: "tgmax-sync-worker",
+      name: "tgmax-sync-web",
       cwd: "/root/tgmax-sync",
       script: "npm",
-      args: "run sync:worker -- --source-channel @replace_me --max-chat-id -1000000000000",
+      args: "run web",
       interpreter: "none",
       autorestart: true,
       watch: false,
-      max_memory_restart: "400M",
+      max_memory_restart: "600M",
       env: {
         NODE_ENV: "production",
       },

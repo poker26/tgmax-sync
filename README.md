@@ -1,63 +1,56 @@
 # tgmax-sync
 
-Сервис непрерывной синхронизации `Telegram (master) -> Max (mirror)` в near-realtime режиме.
+Multi-tenant сервис синхронизации `Telegram (master) -> Max (mirror)` с веб-интерфейсом.
 
-## Что делает
+## Что уже реализовано в этой версии
 
-- опрашивает Telegram-канал с заданным интервалом;
-- обнаруживает create/update/delete изменения;
-- ставит события в очередь `sync_events`;
-- применяет изменения в Max-канал через Bot API;
-- ведет карту соответствий `message_map` и курсор `sync_cursor`;
-- автоматически подбирает зависшие `processing` события и повторяет retryable ошибки.
+- simple auth: `email/password` + сессии `Bearer` токеном;
+- строгая tenant-изоляция на уровне API и repository (`user_id` в каждом запросе);
+- per-user Telegram session (`telegram_accounts`);
+- web UI: Login, My Channels, Logs/Status;
+- shared queue архитектура: `sync_jobs` + единый scheduler + pooled workers;
+- защита от смешения каналов: job содержит только `channel_sync_config_id`, конфиг перечитывается из БД с проверкой владельца.
 
-## Быстрый старт
+## Миграции и таблицы
 
-1. Скопировать `.env.example` в `.env` и заполнить переменные.
-2. Установить зависимости:
-   - `npm install`
-3. Прогнать миграции:
-   - `npm run migrate`
-4. Запустить воркер:
-   - `npm run sync:worker -- --source-channel @your_channel --max-chat-id -123456789`
+Новая migration `004_multi_tenant_core.sql` добавляет:
 
-## Параметры запуска (обязательные)
+- `users`
+- `user_sessions`
+- `telegram_accounts`
+- `channel_sync_configs`
+- `sync_jobs`
+- `sync_job_logs`
+- `channel_sync_state`
+- `channel_message_map`
 
-- `--source-channel @yourchannel`
-- `--max-chat-id -123456789`
+## Быстрый старт (dev/prod шаги)
 
-Каналы не читаются из `.env` и должны задаваться явно при запуске
-(или как `args` в `ecosystem.config.cjs`).
+1. Скопировать `.env.example` в `.env` и заполнить.
+2. Установить зависимости: `npm install`.
+3. Прогнать миграции: `npm run migrate`.
+4. Запустить web+engine: `npm run web`.
+5. Открыть UI: `http://localhost:3030`.
 
-## Основные переменные
+## Основные env-переменные
 
-- `SYNC_POLL_INTERVAL_MS=30000`
-- `SYNC_POLL_LIMIT=200`
-- `SYNC_EVENT_BATCH_SIZE=50`
+- `WEB_PORT=3030`
+- `WEB_SESSION_TTL_HOURS=72`
+- `SYNC_SCHEDULER_INTERVAL_MS=10000`
+- `SYNC_WORKER_CONCURRENCY=2`
+- `SYNC_MAX_ATTEMPTS=8`
+
+## Принцип tenant-safety
+
+- все защищенные API endpoint используют `TenantGuard` через bearer auth;
+- в `sync_jobs` маршрутизация идет через `channel_sync_config_id`, не через "свободные" channel ids;
+- worker перед исполнением проверяет связку `job.user_id == config.user_id == telegram_account.user_id`;
+- логи и джобы в UI фильтруются только по `auth.user_id`.
 
 ## PM2
 
-Используйте `ecosystem.config.cjs`:
+Для прод-запуска используйте `ecosystem.config.cjs` и процесс `tgmax-sync-web`.
 
-- `pm2 start ecosystem.config.cjs`
-- `pm2 save`
-- `pm2 startup`
-
-Проверка:
-
-- `pm2 status`
-- `pm2 logs tgmax-sync-worker --lines 100`
-
-## Схема таблиц
-
-Миграции создают/обновляют:
-
-- `channel_posts`
-- `media_uploads`
-- `crosspost_log`
-- `sync_cursor`
-- `message_map`
-- `sync_events`
-- `sync_locks`
-
-Подробный операционный документ: `RUNBOOK.md`.
+Подробные команды и проверки: `RUNBOOK.md`.
+Проверки tenant-изоляции: `MULTI_TENANT_VALIDATION.md`.
+Сценарий проверки первого пользователя: `SMOKE_FIRST_USER.md`.
