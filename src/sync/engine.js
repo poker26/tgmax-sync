@@ -3,64 +3,38 @@ import { getMaxBotMe } from "../max/api.js";
 import {
   addSyncJobLog,
   claimPendingJobs,
-  enqueueSyncJob,
-  hasPendingOrProcessingJob,
-  listActiveChannelSyncConfigs,
-  loadTelegramAccountByUserId,
+  loadChannelSyncConfigByIdForUser,
+  markBotWebhookUpdateFailed,
+  markBotWebhookUpdateProcessed,
+  markChannelJobError,
+  markChannelJobProcessed,
   markSyncJobDone,
   markSyncJobFailed,
 } from "../db/multi-tenant-repository.js";
-import { processChannelSyncJob } from "./channel-processor.js";
+import { processTelegramWebhookSyncJob } from "./bot-webhook-processor.js";
 
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function enqueueDueJobs() {
-  const activeConfigs = await listActiveChannelSyncConfigs();
-  for (const activeConfig of activeConfigs) {
-    const hasRunningJob = await hasPendingOrProcessingJob(activeConfig.id);
-    if (hasRunningJob) continue;
-    await enqueueSyncJob({
-      userId: activeConfig.user_id,
-      configId: activeConfig.id,
-    });
-  }
-}
-
 async function processSingleJob(syncJob) {
-  const channelConfigId = syncJob.channel_sync_config_id;
-  const userId = syncJob.user_id;
-  const telegramAccount = await loadTelegramAccountByUserId(userId);
-  if (!telegramAccount || telegramAccount.status !== "active") {
-    throw new Error("Telegram account session is missing or disabled for this user.");
-  }
-
-  const activeConfigs = await listActiveChannelSyncConfigs();
-  const configRow = activeConfigs.find(
-    (candidateConfig) => candidateConfig.id === channelConfigId && candidateConfig.user_id === userId
+  const configRow = await loadChannelSyncConfigByIdForUser(
+    syncJob.user_id,
+    syncJob.channel_sync_config_id
   );
-  if (!configRow) {
+  if (!configRow || configRow.status !== "active") {
     throw new Error("Channel sync config is missing, inactive, or not owned by job user.");
   }
-  if (String(configRow.user_id) !== String(syncJob.user_id)) {
-    throw new Error("Tenant isolation violation: job user does not match channel config owner.");
-  }
-  if (String(telegramAccount.user_id) !== String(syncJob.user_id)) {
-    throw new Error("Tenant isolation violation: Telegram session owner mismatch.");
-  }
 
-  const syncResult = await processChannelSyncJob({
-    userId,
-    configId: configRow.id,
-    sourceChannelId: configRow.source_channel_id,
-    targetChatId: configRow.target_chat_id,
-    pollLimit: configRow.poll_limit,
-    sessionString: telegramAccount.session_string,
-  });
+  let syncResult;
+  if (syncJob.job_type === "telegram_webhook") {
+    syncResult = await processTelegramWebhookSyncJob({ syncJob, channelConfig: configRow });
+  } else {
+    throw new Error(`Unsupported job type: ${syncJob.job_type}`);
+  }
 
   await addSyncJobLog({
-    userId,
+    userId: syncJob.user_id,
     configId: configRow.id,
     jobId: syncJob.id,
     level: "info",
@@ -77,17 +51,35 @@ async function runWorkerBatch() {
 
   await Promise.all(
     pendingJobs.map(async (pendingJob) => {
+      const startedAtMs = Date.now();
       try {
         await processSingleJob(pendingJob);
-        await markSyncJobDone(pendingJob.id);
+        if (pendingJob.job_type === "telegram_webhook" && pendingJob.external_event_id) {
+          await markBotWebhookUpdateProcessed(
+            pendingJob.channel_sync_config_id,
+            Number(pendingJob.external_event_id)
+          );
+        }
+        await markChannelJobProcessed(pendingJob.channel_sync_config_id);
+        await markSyncJobDone(pendingJob.id, {
+          processingLatencyMs: Date.now() - startedAtMs,
+        });
       } catch (error) {
         const nextAttemptCount = Number(pendingJob.attempt_count ?? 0) + 1;
+        await markChannelJobError(pendingJob.channel_sync_config_id, error?.message ?? String(error));
         await markSyncJobFailed({
           jobId: pendingJob.id,
           attemptCount: nextAttemptCount,
           maxAttempts: config.sync.maxAttempts,
           errorMessage: error?.message ?? String(error),
         });
+        if (pendingJob.job_type === "telegram_webhook" && pendingJob.external_event_id) {
+          await markBotWebhookUpdateFailed(
+            pendingJob.channel_sync_config_id,
+            Number(pendingJob.external_event_id),
+            error?.message ?? String(error)
+          );
+        }
         await addSyncJobLog({
           userId: pendingJob.user_id,
           configId: pendingJob.channel_sync_config_id,
@@ -114,7 +106,6 @@ export async function startSyncEngine() {
 
   while (true) {
     try {
-      await enqueueDueJobs();
       await runWorkerBatch();
     } catch (error) {
       console.error("[sync-engine] loop failure:", error.message);

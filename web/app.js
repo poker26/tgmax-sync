@@ -1,12 +1,15 @@
 const authPanel = document.getElementById("authPanel");
 const appPanel = document.getElementById("appPanel");
 const authOutput = document.getElementById("authOutput");
-const sessionOutput = document.getElementById("sessionOutput");
+const telegramBotOutput = document.getElementById("telegramBotOutput");
+const telegramBotHint = document.getElementById("telegramBotHint");
 const logsOutput = document.getElementById("logsOutput");
 const channelsContainer = document.getElementById("channelsContainer");
+const channelStatusOutput = document.getElementById("channelStatusOutput");
 const logsChannelFilter = document.getElementById("logsChannelFilter");
 const bootstrapHint = document.getElementById("bootstrapHint");
 const registerButton = document.getElementById("registerButton");
+const addChannelOutput = document.getElementById("addChannelOutput");
 
 function getToken() {
   return localStorage.getItem("tgmax_token") || "";
@@ -50,6 +53,7 @@ async function tryRestoreSession() {
   try {
     await apiRequest("/api/me", { method: "GET" });
     renderAuthState(true);
+    await loadTelegramBotMeta();
     await loadChannels();
     await loadLogs();
   } catch {
@@ -83,14 +87,11 @@ document.getElementById("loginButton").addEventListener("click", async () => {
       body: JSON.stringify({ email, password }),
     });
     setToken(responseBody.token);
-    authOutput.textContent = responseBody.sessionAttachedFromEnv
-      ? "Login successful. Telegram connected automatically."
-      : "Login successful.";
+    authOutput.textContent = "Login successful.";
     renderAuthState(true);
+    await loadTelegramBotMeta();
     await loadChannels();
     await loadLogs();
-    const sessionBody = await apiRequest("/api/telegram/session", { method: "GET" });
-    sessionOutput.textContent = JSON.stringify(sessionBody, null, 2);
   } catch (error) {
     authOutput.textContent = error.message;
   }
@@ -111,14 +112,20 @@ document.getElementById("registerButton").addEventListener("click", async () => 
   }
 });
 
-document.getElementById("checkSessionButton").addEventListener("click", async () => {
+async function loadTelegramBotMeta() {
   try {
-    const responseBody = await apiRequest("/api/telegram/session", { method: "GET" });
-    sessionOutput.textContent = JSON.stringify(responseBody, null, 2);
+    const botMeta = await apiRequest("/api/telegram/bot/meta", { method: "GET" });
+    telegramBotHint.textContent = `Добавьте ${botMeta.botUsername ?? "бота"} в ваш TG-канал администратором, затем подключите канал.`;
+    telegramBotOutput.textContent = JSON.stringify(botMeta, null, 2);
   } catch (error) {
-    sessionOutput.textContent = error.message;
+    telegramBotHint.textContent = "Не удалось получить данные Telegram-бота.";
+    telegramBotOutput.textContent = error.message;
   }
-});
+}
+
+document
+  .getElementById("refreshBotMetaButton")
+  .addEventListener("click", async () => loadTelegramBotMeta());
 
 document.getElementById("addChannelButton").addEventListener("click", async () => {
   try {
@@ -126,7 +133,7 @@ document.getElementById("addChannelButton").addEventListener("click", async () =
     const targetChatId = document.getElementById("targetChatInput").value;
     const pollIntervalMs = Number.parseInt(document.getElementById("pollIntervalInput").value, 10);
     const pollLimit = Number.parseInt(document.getElementById("pollLimitInput").value, 10);
-    await apiRequest("/api/channels", {
+    const createdChannelResponse = await apiRequest("/api/channels", {
       method: "POST",
       body: JSON.stringify({
         sourceChannelId,
@@ -135,9 +142,19 @@ document.getElementById("addChannelButton").addEventListener("click", async () =
         pollLimit,
       }),
     });
+    const channelConfigId = createdChannelResponse?.channel?.id;
+    if (channelConfigId) {
+      const connectResponse = await apiRequest("/api/telegram/bot/connect-channel", {
+        method: "POST",
+        body: JSON.stringify({ channelConfigId }),
+      });
+      addChannelOutput.textContent = `Channel created and bot validated. Status: ${connectResponse.botStatus}`;
+    } else {
+      addChannelOutput.textContent = "Channel created.";
+    }
     await loadChannels();
   } catch (error) {
-    alert(error.message);
+    addChannelOutput.textContent = error.message;
   }
 });
 
@@ -170,7 +187,11 @@ async function loadChannels() {
     channelElement.innerHTML = `
       <div><b>${channel.source_channel_id}</b> -> <b>${channel.target_chat_id}</b></div>
       <div>Status: ${channel.status}</div>
+      <div>Source type: ${channel.source_type ?? "telegram_bot_channel"}</div>
+      <div>Bot status: ${channel.bot_membership_status ?? "unknown"}</div>
       <div>Poll: ${channel.poll_interval_ms}ms, limit ${channel.poll_limit}</div>
+      <button data-action="connect">Validate bot access</button>
+      <button data-action="status">Show status</button>
       <button data-action="active">Start</button>
       <button data-action="paused">Pause</button>
       <button data-action="disabled">Disable</button>
@@ -179,7 +200,16 @@ async function loadChannels() {
     channelElement.querySelectorAll("button").forEach((buttonElement) => {
       buttonElement.addEventListener("click", async () => {
         const action = buttonElement.dataset.action;
-        if (action === "delete") {
+        if (action === "connect") {
+          await apiRequest("/api/telegram/bot/connect-channel", {
+            method: "POST",
+            body: JSON.stringify({ channelConfigId: channel.id }),
+          });
+          await loadChannels();
+        } else if (action === "status") {
+          const statusPayload = await apiRequest(`/api/channels/${channel.id}/status`, { method: "GET" });
+          channelStatusOutput.textContent = JSON.stringify(statusPayload, null, 2);
+        } else if (action === "delete") {
           await deleteChannel(channel.id);
         } else {
           await setChannelStatus(channel.id, action);

@@ -1,4 +1,4 @@
-# Smoke test: first user flow
+# Smoke test: first user BotAPI flow
 
 Документ для ручной проверки веб-морды и базового сценария первого пользователя.
 
@@ -22,22 +22,34 @@
 
 1. Ввести email/password первого пользователя.
 2. Нажать `Login`.
-3. Ожидается переход в рабочую часть UI (`Telegram session`, `My channels`, `Logs`).
+3. Ожидается переход в рабочую часть UI (`Telegram Bot onboarding`, `My channels`, `Logs`).
 
-## 4) Проверка My Channels
+## 4) Проверка подключения Telegram-бота
+
+1. В блоке `Telegram Bot onboarding` нажать refresh.
+2. Проверить, что выводится username бота (например `@your_sync_bot`).
+3. В Telegram добавить этого бота в канал как администратора.
+
+## 5) Проверка My Channels
 
 1. Добавить канал (`@source_channel`) и target chat id (`-123...`).
 2. Убедиться, что новая связка появилась в списке.
-3. Проверить кнопки `Start`, `Pause`, `Disable`, `Delete`.
+3. Нажать `Validate bot access`, убедиться в `Bot status: connected`.
+4. Проверить кнопки `Start`, `Pause`, `Disable`, `Delete`.
 
-## 5) Проверка Logs & Status
+## 6) Проверка Logs & Status
 
 1. Нажать `Refresh logs`.
 2. Убедиться, что отображаются последние строки логов.
 3. Проверить фильтр `Filter by channel`:
    - выбрать конкретную связку и сверить, что отображаются только ее логи.
+4. Нажать `Show status` в карточке канала и проверить:
+   - `pendingQueueDepth`
+   - `webhookErrors`
+   - `averageProcessingLatencyMs`
+   - `recentWebhookUpdates`
 
-## 6) API quick checks (опционально)
+## 7) API quick checks (опционально)
 
 ```bash
 curl -i http://127.0.0.1:3030/api/auth/bootstrap-status
@@ -51,4 +63,13 @@ curl -i http://127.0.0.1:3030/api/channels -H "Authorization: Bearer <TOKEN>"
 
 ```bash
 curl -i "http://127.0.0.1:3030/api/logs?limit=20" -H "Authorization: Bearer <TOKEN>"
+```
+
+Webhook check:
+
+```bash
+curl -i http://127.0.0.1:3030/api/webhooks/telegram \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: <TG_BOT_WEBHOOK_SECRET>" \
+  -d '{"update_id":123,"channel_post":{"message_id":1,"date":1710000000,"chat":{"id":-1001234567890,"username":"source_channel"},"text":"hello"}}'
 ```

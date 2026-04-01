@@ -68,13 +68,13 @@ export async function resolveAuthenticatedUser(authorizationHeader) {
   if (!rawToken) return null;
   const tokenHash = hashToken(rawToken);
   const sessionRow = await loadUserBySessionTokenHash(tokenHash);
-  if (!sessionRow || !sessionRow.users) return null;
-  if (sessionRow.users.status !== "active") return null;
+  if (!sessionRow || !sessionRow.user) return null;
+  if (sessionRow.user.status !== "active") return null;
   return {
     sessionId: sessionRow.id,
     user: {
-      id: sessionRow.users.id,
-      email: sessionRow.users.email,
+      id: sessionRow.user.id,
+      email: sessionRow.user.email,
     },
     tokenHash,
   };

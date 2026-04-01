@@ -8,6 +8,7 @@ const TABLE_SYNC_JOBS = "tg_sync_jobs";
 const TABLE_SYNC_JOB_LOGS = "tg_sync_job_logs";
 const TABLE_SYNC_STATE = "tg_channel_sync_state";
 const TABLE_MESSAGE_MAP = "tg_channel_message_map";
+const TABLE_BOT_UPDATES = "tg_bot_updates_log";
 
 export async function createUser({ email, passwordHash }) {
   const { data, error } = await supabase
@@ -59,14 +60,29 @@ export async function createUserSession({ userId, tokenHash, expiresAt, userAgen
 
 export async function loadUserBySessionTokenHash(tokenHash) {
   const nowIso = new Date().toISOString();
-  const { data, error } = await supabase
+  const { data: sessionRow, error: sessionError } = await supabase
     .from(TABLE_USER_SESSIONS)
-    .select("id, user_id, expires_at, users(id, email, status)")
+    .select("id, user_id, expires_at")
     .eq("token_hash", tokenHash)
     .gt("expires_at", nowIso)
     .maybeSingle();
-  if (error) throw new Error(`user_sessions select failed: ${error.message}`);
-  return data;
+  if (sessionError) throw new Error(`user_sessions select failed: ${sessionError.message}`);
+  if (!sessionRow) return null;
+
+  const { data: userRow, error: userError } = await supabase
+    .from(TABLE_USERS)
+    .select("id, email, status")
+    .eq("id", sessionRow.user_id)
+    .maybeSingle();
+  if (userError) throw new Error(`users select by id failed: ${userError.message}`);
+  if (!userRow) return null;
+
+  return {
+    id: sessionRow.id,
+    user_id: sessionRow.user_id,
+    expires_at: sessionRow.expires_at,
+    user: userRow,
+  };
 }
 
 export async function deleteSessionByTokenHash(tokenHash) {
@@ -101,6 +117,8 @@ export async function createChannelSyncConfig({
   userId,
   sourceChannelId,
   targetChatId,
+  sourceType = "telegram_bot_channel",
+  sourceChannelIdentifier = null,
   pollIntervalMs = 30000,
   pollLimit = 200,
 }) {
@@ -109,6 +127,8 @@ export async function createChannelSyncConfig({
     .insert({
       user_id: userId,
       source_channel_id: sourceChannelId,
+      source_type: sourceType,
+      source_channel_identifier: sourceChannelIdentifier,
       target_chat_id: String(targetChatId),
       poll_interval_ms: pollIntervalMs,
       poll_limit: pollLimit,
@@ -174,6 +194,94 @@ export async function listActiveChannelSyncConfigs() {
   return data ?? [];
 }
 
+export async function loadActiveChannelSyncConfigByTelegramChat({ chatId, chatUsername }) {
+  const normalizedChatId = String(chatId ?? "").trim();
+  const normalizedChatUsername = String(chatUsername ?? "").trim().toLowerCase();
+  let query = supabase
+    .from(TABLE_CHANNEL_CONFIGS)
+    .select("*")
+    .eq("status", "active")
+    .eq("source_type", "telegram_bot_channel");
+
+  if (normalizedChatId) {
+    query = query.or(
+      `source_channel_identifier.eq.${normalizedChatId},source_channel_id.eq.${normalizedChatId}`
+    );
+  } else if (normalizedChatUsername) {
+    query = query.eq("source_channel_id", normalizedChatUsername);
+  } else {
+    return null;
+  }
+
+  const { data, error } = await query.limit(1).maybeSingle();
+  if (error) throw new Error(`channel_sync_configs telegram chat lookup failed: ${error.message}`);
+  return data;
+}
+
+export async function updateChannelBotConnectionStatus({
+  userId,
+  configId,
+  sourceChannelIdentifier,
+  botMembershipStatus,
+  sourceChannelId = null,
+}) {
+  const updatePayload = {
+    source_type: "telegram_bot_channel",
+    source_channel_identifier: String(sourceChannelIdentifier ?? ""),
+    bot_membership_status: botMembershipStatus,
+    bot_permissions_validated_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (sourceChannelId) {
+    updatePayload.source_channel_id = String(sourceChannelId).trim();
+  }
+  const { data, error } = await supabase
+    .from(TABLE_CHANNEL_CONFIGS)
+    .update(updatePayload)
+    .eq("id", configId)
+    .eq("user_id", userId)
+    .select("*")
+    .single();
+  if (error) throw new Error(`channel_sync_configs bot status update failed: ${error.message}`);
+  return data;
+}
+
+export async function markChannelWebhookUpdateSeen(configId) {
+  const { error } = await supabase
+    .from(TABLE_CHANNEL_CONFIGS)
+    .update({
+      last_webhook_update_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", configId);
+  if (error) throw new Error(`channel_sync_configs webhook timestamp update failed: ${error.message}`);
+}
+
+export async function markChannelJobProcessed(configId) {
+  const { error } = await supabase
+    .from(TABLE_CHANNEL_CONFIGS)
+    .update({
+      last_processed_update_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      last_error_at: null,
+      last_error_message: null,
+    })
+    .eq("id", configId);
+  if (error) throw new Error(`channel_sync_configs processed timestamp update failed: ${error.message}`);
+}
+
+export async function markChannelJobError(configId, errorMessage) {
+  const { error } = await supabase
+    .from(TABLE_CHANNEL_CONFIGS)
+    .update({
+      last_error_at: new Date().toISOString(),
+      last_error_message: String(errorMessage ?? "").slice(0, 1000),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", configId);
+  if (error) throw new Error(`channel_sync_configs error update failed: ${error.message}`);
+}
+
 export async function hasPendingOrProcessingJob(configId) {
   const { count, error } = await supabase
     .from(TABLE_SYNC_JOBS)
@@ -184,19 +292,155 @@ export async function hasPendingOrProcessingJob(configId) {
   return Number(count ?? 0) > 0;
 }
 
-export async function enqueueSyncJob({ userId, configId }) {
+export async function enqueueSyncJob({
+  userId,
+  configId,
+  jobType = "legacy_poll",
+  eventType = null,
+  sourceMessageId = null,
+  externalEventId = null,
+  payload = {},
+}) {
   const { data, error } = await supabase
     .from(TABLE_SYNC_JOBS)
     .insert({
       user_id: userId,
       channel_sync_config_id: configId,
       status: "pending",
+      job_type: jobType,
+      event_type: eventType,
+      source_message_id: sourceMessageId,
+      external_event_id: externalEventId,
+      payload,
       scheduled_at: new Date().toISOString(),
     })
     .select("*")
     .single();
-  if (error) throw new Error(`sync_jobs insert failed: ${error.message}`);
-  return data;
+  if (!error) return { queued: true, job: data };
+  if (error.code === "23505") return { queued: false, job: null };
+  throw new Error(`sync_jobs insert failed: ${error.message}`);
+}
+
+export async function recordBotWebhookUpdate({
+  userId,
+  configId,
+  updateId,
+  sourceMessageId,
+  eventType,
+  payload,
+}) {
+  const { data, error } = await supabase
+    .from(TABLE_BOT_UPDATES)
+    .insert({
+      user_id: userId,
+      channel_sync_config_id: configId,
+      update_id: updateId,
+      source_message_id: sourceMessageId,
+      event_type: eventType,
+      payload,
+      status: "queued",
+      updated_at: new Date().toISOString(),
+    })
+    .select("*")
+    .single();
+  if (!error) return { queued: true, row: data };
+  if (error.code === "23505") return { queued: false, row: null };
+  throw new Error(`tg_bot_updates insert failed: ${error.message}`);
+}
+
+export async function markBotWebhookUpdateProcessed(configId, updateId) {
+  const { error } = await supabase
+    .from(TABLE_BOT_UPDATES)
+    .update({
+      status: "done",
+      processed_at: new Date().toISOString(),
+      error_message: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("channel_sync_config_id", configId)
+    .eq("update_id", updateId);
+  if (error) throw new Error(`tg_bot_updates done update failed: ${error.message}`);
+}
+
+export async function markBotWebhookUpdateFailed(configId, updateId, errorMessage) {
+  const { error } = await supabase
+    .from(TABLE_BOT_UPDATES)
+    .update({
+      status: "error",
+      error_message: String(errorMessage ?? "").slice(0, 1000),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("channel_sync_config_id", configId)
+    .eq("update_id", updateId);
+  if (error) throw new Error(`tg_bot_updates failed update failed: ${error.message}`);
+}
+
+export async function loadChannelStatusMetrics({ userId, configId }) {
+  const [jobsResult, updatesResult, latencyRowsResult] = await Promise.all([
+    supabase
+      .from(TABLE_SYNC_JOBS)
+      .select("status", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("channel_sync_config_id", configId)
+      .eq("status", "pending"),
+    supabase
+      .from(TABLE_BOT_UPDATES)
+      .select("status", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("channel_sync_config_id", configId)
+      .eq("status", "error"),
+    supabase
+      .from(TABLE_SYNC_JOBS)
+      .select("processing_latency_ms")
+      .eq("user_id", userId)
+      .eq("channel_sync_config_id", configId)
+      .eq("status", "done")
+      .not("processing_latency_ms", "is", null)
+      .order("finished_at", { ascending: false })
+      .limit(50),
+  ]);
+  if (jobsResult.error) throw new Error(`status metrics pending count failed: ${jobsResult.error.message}`);
+  if (updatesResult.error) throw new Error(`status metrics error count failed: ${updatesResult.error.message}`);
+  if (latencyRowsResult.error) {
+    throw new Error(`status metrics latency query failed: ${latencyRowsResult.error.message}`);
+  }
+  const latencyRows = latencyRowsResult.data ?? [];
+  const averageProcessingLatencyMs =
+    latencyRows.length > 0
+      ? Math.round(
+          latencyRows.reduce(
+            (sum, latencyRow) => sum + Number(latencyRow.processing_latency_ms ?? 0),
+            0
+          ) / latencyRows.length
+        )
+      : null;
+  return {
+    pendingQueueDepth: Number(jobsResult.count ?? 0),
+    webhookErrors: Number(updatesResult.count ?? 0),
+    averageProcessingLatencyMs,
+  };
+}
+
+export async function listRecentBotWebhookUpdates({ userId, configId, limit = 50 }) {
+  const { data, error } = await supabase
+    .from(TABLE_BOT_UPDATES)
+    .select("update_id, source_message_id, event_type, status, error_message, created_at, processed_at")
+    .eq("user_id", userId)
+    .eq("channel_sync_config_id", configId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`tg_bot_updates list failed: ${error.message}`);
+  return data ?? [];
+}
+
+export async function listActiveLegacyPollingConfigs() {
+  const { data, error } = await supabase
+    .from(TABLE_CHANNEL_CONFIGS)
+    .select("*")
+    .eq("status", "active")
+    .neq("source_type", "telegram_bot_channel");
+  if (error) throw new Error(`legacy polling config list failed: ${error.message}`);
+  return data ?? [];
 }
 
 export async function claimPendingJobs({ limit }) {
@@ -229,7 +473,7 @@ export async function claimPendingJobs({ limit }) {
   return claimedJobs;
 }
 
-export async function markSyncJobDone(jobId) {
+export async function markSyncJobDone(jobId, { processingLatencyMs = null } = {}) {
   const { error } = await supabase
     .from(TABLE_SYNC_JOBS)
     .update({
@@ -237,6 +481,7 @@ export async function markSyncJobDone(jobId) {
       finished_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       error_message: null,
+      processing_latency_ms: processingLatencyMs,
     })
     .eq("id", jobId);
   if (error) throw new Error(`sync_jobs done update failed: ${error.message}`);

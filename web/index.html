@@ -37,12 +37,10 @@
 
     <div id="appPanel" class="hidden">
       <div class="panel">
-        <h3>Telegram connection</h3>
-        <div>
-          При входе система автоматически использует серверный Telegram session из конфигурации.
-        </div>
-        <button id="checkSessionButton">Check session status</button>
-        <pre id="sessionOutput"></pre>
+        <h3>Telegram Bot onboarding</h3>
+        <div id="telegramBotHint"></div>
+        <button id="refreshBotMetaButton">Refresh Telegram bot info</button>
+        <pre id="telegramBotOutput"></pre>
       </div>
 
       <div class="panel">
@@ -68,12 +66,14 @@
           </div>
         </div>
         <button id="addChannelButton">Add channel</button>
+        <div id="addChannelOutput"></div>
       </div>
 
       <div class="panel">
         <h3>My channels</h3>
         <button id="refreshChannelsButton">Refresh channels</button>
         <div id="channelsContainer"></div>
+        <pre id="channelStatusOutput"></pre>
       </div>
 
       <div class="panel">

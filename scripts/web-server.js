@@ -8,13 +8,18 @@ import {
   countUsers,
   createChannelSyncConfig,
   deleteChannelSyncConfig,
+  enqueueSyncJob,
   listChannelSyncConfigsByUserId,
+  listRecentBotWebhookUpdates,
+  loadActiveChannelSyncConfigByTelegramChat,
+  loadChannelStatusMetrics,
   listSyncJobLogsByUser,
   listSyncJobsByUser,
+  markChannelWebhookUpdateSeen,
   loadChannelSyncConfigByIdForUser,
-  loadTelegramAccountByUserId,
+  recordBotWebhookUpdate,
+  updateChannelBotConnectionStatus,
   updateChannelSyncConfigStatus,
-  upsertTelegramAccount,
 } from "../src/db/multi-tenant-repository.js";
 import {
   loginWithEmailPassword,
@@ -23,6 +28,12 @@ import {
   registerFirstUser,
   resolveAuthenticatedUser,
 } from "../src/auth.js";
+import {
+  getTelegramBotMe,
+  getTelegramChat,
+  getTelegramChatMember,
+  normalizeTelegramChannelPostUpdate,
+} from "../src/telegram/bot-api.js";
 import { startSyncEngine } from "../src/sync/engine.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -52,22 +63,6 @@ async function requireAuthenticatedUser(request, response, next) {
   } catch (error) {
     sendError(response, 500, error.message);
   }
-}
-
-async function attachEnvTelegramSessionForUserIfMissing(userId) {
-  const envSessionString = String(config.telegram.session ?? "").trim();
-  if (!envSessionString) return false;
-
-  const existingTelegramAccount = await loadTelegramAccountByUserId(userId);
-  if (existingTelegramAccount?.session_string) {
-    return false;
-  }
-
-  await upsertTelegramAccount({
-    userId,
-    sessionString: envSessionString,
-  });
-  return true;
 }
 
 function createApiServer() {
@@ -124,14 +119,10 @@ function createApiServer() {
         sendError(response, 401, "Invalid credentials.");
         return;
       }
-      const sessionAttachedFromEnv = await attachEnvTelegramSessionForUserIfMissing(
-        loginResult.user.id
-      );
       response.status(200).json({
         ok: true,
         token: loginResult.token,
         user: loginResult.user,
-        sessionAttachedFromEnv,
       });
     } catch (error) {
       sendError(response, 500, error.message);
@@ -148,41 +139,7 @@ function createApiServer() {
   });
 
   app.get("/api/me", requireAuthenticatedUser, async (request, response) => {
-    const sessionAttachedFromEnv = await attachEnvTelegramSessionForUserIfMissing(
-      request.auth.user.id
-    );
-    response.status(200).json({ ok: true, user: request.auth.user, sessionAttachedFromEnv });
-  });
-
-  app.get("/api/telegram/session", requireAuthenticatedUser, async (request, response) => {
-    try {
-      const telegramAccount = await loadTelegramAccountByUserId(request.auth.user.id);
-      response.status(200).json({
-        ok: true,
-        hasSession: Boolean(telegramAccount?.session_string),
-        status: telegramAccount?.status ?? "missing",
-        source: telegramAccount?.session_string ? "stored_for_user" : "missing",
-      });
-    } catch (error) {
-      sendError(response, 500, error.message);
-    }
-  });
-
-  app.post("/api/telegram/session", requireAuthenticatedUser, async (request, response) => {
-    try {
-      const sessionString = String(request.body?.sessionString ?? "").trim();
-      if (!sessionString) {
-        sendError(response, 400, "sessionString is required.");
-        return;
-      }
-      await upsertTelegramAccount({
-        userId: request.auth.user.id,
-        sessionString,
-      });
-      response.status(200).json({ ok: true });
-    } catch (error) {
-      sendError(response, 500, error.message);
-    }
+    response.status(200).json({ ok: true, user: request.auth.user });
   });
 
   app.get("/api/channels", requireAuthenticatedUser, async (request, response) => {
@@ -210,6 +167,8 @@ function createApiServer() {
         userId: request.auth.user.id,
         sourceChannelId,
         targetChatId,
+        sourceType: "telegram_bot_channel",
+        sourceChannelIdentifier: null,
         pollIntervalMs: parsePositiveInteger(request.body?.pollIntervalMs, 30000),
         pollLimit: parsePositiveInteger(request.body?.pollLimit, 200),
       });
@@ -278,6 +237,177 @@ function createApiServer() {
         limit: parsePositiveInteger(request.query.limit, 200),
       });
       response.status(200).json({ ok: true, logs });
+    } catch (error) {
+      sendError(response, 500, error.message);
+    }
+  });
+
+  app.get("/api/telegram/bot/meta", requireAuthenticatedUser, async (request, response) => {
+    try {
+      const botProfile = await getTelegramBotMe();
+      response.status(200).json({
+        ok: true,
+        botUsername: botProfile?.username ? `@${botProfile.username}` : null,
+        botId: botProfile?.id ?? null,
+        onboardingHint:
+          "Add this bot to your Telegram channel as administrator with permission to post/read channel messages.",
+      });
+    } catch (error) {
+      sendError(response, 500, error.message);
+    }
+  });
+
+  app.post("/api/telegram/bot/connect-channel", requireAuthenticatedUser, async (request, response) => {
+    try {
+      const channelConfigId = String(request.body?.channelConfigId ?? "").trim();
+      if (!channelConfigId) {
+        sendError(response, 400, "channelConfigId is required.");
+        return;
+      }
+      const channelConfig = await loadChannelSyncConfigByIdForUser(request.auth.user.id, channelConfigId);
+      if (!channelConfig) {
+        sendError(response, 404, "Channel config not found.");
+        return;
+      }
+
+      const chatData = await getTelegramChat(channelConfig.source_channel_id);
+      const botProfile = await getTelegramBotMe();
+      const botMember = await getTelegramChatMember(chatData.id, botProfile.id);
+      const memberStatus = String(botMember?.status ?? "").toLowerCase();
+      const hasRequiredPermissions = memberStatus === "administrator" || memberStatus === "creator";
+      const nextStatus = hasRequiredPermissions ? "connected" : "insufficient_rights";
+      const normalizedChannelUsername = chatData?.username ? `@${chatData.username}` : channelConfig.source_channel_id;
+
+      const updatedConfig = await updateChannelBotConnectionStatus({
+        userId: request.auth.user.id,
+        configId: channelConfig.id,
+        sourceChannelIdentifier: String(chatData.id),
+        sourceChannelId: normalizedChannelUsername,
+        botMembershipStatus: nextStatus,
+      });
+      response.status(200).json({
+        ok: true,
+        channel: updatedConfig,
+        botStatus: nextStatus,
+        chatId: String(chatData.id),
+      });
+    } catch (error) {
+      sendError(response, 400, error.message);
+    }
+  });
+
+  app.get("/api/telegram/bot/status/:channelConfigId", requireAuthenticatedUser, async (request, response) => {
+    try {
+      const channelConfig = await loadChannelSyncConfigByIdForUser(
+        request.auth.user.id,
+        request.params.channelConfigId
+      );
+      if (!channelConfig) {
+        sendError(response, 404, "Channel config not found.");
+        return;
+      }
+      const channelMetrics = await loadChannelStatusMetrics({
+        userId: request.auth.user.id,
+        configId: channelConfig.id,
+      });
+      const recentWebhookUpdates = await listRecentBotWebhookUpdates({
+        userId: request.auth.user.id,
+        configId: channelConfig.id,
+        limit: 20,
+      });
+      response.status(200).json({
+        ok: true,
+        channel: channelConfig,
+        metrics: channelMetrics,
+        recentWebhookUpdates,
+      });
+    } catch (error) {
+      sendError(response, 500, error.message);
+    }
+  });
+
+  app.post("/api/webhooks/telegram", async (request, response) => {
+    try {
+      const expectedSecret = String(config.telegram.webhookSecret ?? "").trim();
+      if (expectedSecret) {
+        const receivedSecret = String(
+          request.headers["x-telegram-bot-api-secret-token"] ?? ""
+        ).trim();
+        if (!receivedSecret || receivedSecret !== expectedSecret) {
+          sendError(response, 401, "Invalid webhook secret.");
+          return;
+        }
+      }
+
+      const normalizedUpdate = normalizeTelegramChannelPostUpdate(request.body ?? {});
+      if (!normalizedUpdate) {
+        response.status(200).json({ ok: true, ignored: true, reason: "unsupported_update_type" });
+        return;
+      }
+
+      const channelConfig = await loadActiveChannelSyncConfigByTelegramChat({
+        chatId: normalizedUpdate.chatId,
+        chatUsername: normalizedUpdate.chatUsername,
+      });
+      if (!channelConfig) {
+        response.status(200).json({ ok: true, ignored: true, reason: "unknown_channel" });
+        return;
+      }
+
+      await markChannelWebhookUpdateSeen(channelConfig.id);
+      const updateLogResult = await recordBotWebhookUpdate({
+        userId: channelConfig.user_id,
+        configId: channelConfig.id,
+        updateId: normalizedUpdate.updateId,
+        sourceMessageId: normalizedUpdate.sourceMessageId,
+        eventType: normalizedUpdate.eventType,
+        payload: normalizedUpdate,
+      });
+      if (!updateLogResult.queued) {
+        response.status(200).json({ ok: true, ignored: true, reason: "duplicate_update" });
+        return;
+      }
+
+      await enqueueSyncJob({
+        userId: channelConfig.user_id,
+        configId: channelConfig.id,
+        jobType: "telegram_webhook",
+        eventType: normalizedUpdate.eventType,
+        sourceMessageId: normalizedUpdate.sourceMessageId,
+        externalEventId: String(normalizedUpdate.updateId),
+        payload: normalizedUpdate,
+      });
+      response.status(200).json({ ok: true, queued: true });
+    } catch (error) {
+      sendError(response, 500, error.message);
+    }
+  });
+
+  app.get("/api/channels/:channelId/status", requireAuthenticatedUser, async (request, response) => {
+    try {
+      const channelConfig = await loadChannelSyncConfigByIdForUser(
+        request.auth.user.id,
+        request.params.channelId
+      );
+      if (!channelConfig) {
+        sendError(response, 404, "Channel config not found.");
+        return;
+      }
+      const channelMetrics = await loadChannelStatusMetrics({
+        userId: request.auth.user.id,
+        configId: channelConfig.id,
+      });
+      const recentWebhookUpdates = await listRecentBotWebhookUpdates({
+        userId: request.auth.user.id,
+        configId: channelConfig.id,
+        limit: 30,
+      });
+      response.status(200).json({
+        ok: true,
+        channel: channelConfig,
+        metrics: channelMetrics,
+        recentWebhookUpdates,
+      });
     } catch (error) {
       sendError(response, 500, error.message);
     }
