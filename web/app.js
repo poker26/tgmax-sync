@@ -70,6 +70,12 @@ function toFriendlyError(error) {
   if (errorText.includes("unauthorized")) {
     return "Сессия истекла. Войдите заново.";
   }
+  if (errorText.includes("уже зарегистрирован")) {
+    return "Пользователь с таким email уже зарегистрирован. Просто войдите.";
+  }
+  if (errorText.includes("registration is disabled")) {
+    return "Регистрация временно недоступна. Попробуйте позже.";
+  }
   if (errorText.includes("uq_tg_initial_import_run_active")) {
     return "Первичный перенос уже запущен для этой связи.";
   }
@@ -243,16 +249,14 @@ function scheduleInitialImportPolling() {
 async function loadBootstrapStatus() {
   try {
     const bootstrapStatus = await apiRequest("/api/auth/bootstrap-status", { method: "GET" });
-    if (bootstrapStatus.bootstrapAllowed) {
-      setStatus(
-        bootstrapHint,
-        "Первый пользователь еще не создан. Нажмите «Создать первый аккаунт»."
-      );
-      registerButton.disabled = false;
-    } else {
-      setStatus(bootstrapHint, "Аккаунт уже создан. Используйте обычный вход.");
-      registerButton.disabled = true;
-    }
+    const usersCount = Number(bootstrapStatus.usersCount ?? 0);
+    setStatus(
+      bootstrapHint,
+      usersCount > 0
+        ? "Новый пользователь? Нажмите «Создать аккаунт», затем войдите."
+        : "Создайте первый аккаунт и войдите в систему."
+    );
+    registerButton.disabled = false;
   } catch (error) {
     setStatus(bootstrapHint, "Не удалось проверить состояние аккаунтов.", "error");
     registerButton.disabled = false;
@@ -596,8 +600,7 @@ document.getElementById("registerButton").addEventListener("click", async () => 
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
-    setStatus(authOutput, "Аккаунт создан. Теперь войдите в систему.", "success");
-    await loadBootstrapStatus();
+    setStatus(authOutput, "Аккаунт создан. Теперь нажмите «Войти».", "success");
   } catch (error) {
     setStatus(authOutput, toFriendlyError(error), "error");
   }

@@ -2,7 +2,6 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { config } from "./config.js";
 import {
-  countUsers,
   createUser,
   createUserSession,
   deleteSessionByTokenHash,
@@ -25,10 +24,6 @@ function extractBearerToken(authorizationHeader) {
 }
 
 export async function registerFirstUser({ email, password }) {
-  const usersCount = await countUsers();
-  if (usersCount > 0) {
-    throw new Error("Registration is disabled after bootstrap user creation.");
-  }
   const passwordHash = await bcrypt.hash(password, 12);
   const user = await createUser({ email, passwordHash });
   return user;

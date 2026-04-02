@@ -120,6 +120,7 @@ function createApiServer() {
         ok: true,
         usersCount,
         bootstrapAllowed: usersCount === 0,
+        registrationOpen: true,
       });
     } catch (error) {
       sendError(response, 500, error.message);
@@ -137,7 +138,12 @@ function createApiServer() {
       const createdUser = await registerFirstUser({ email, password });
       response.status(201).json({ ok: true, user: createdUser });
     } catch (error) {
-      sendError(response, 400, error.message);
+      const rawMessage = String(error?.message ?? "");
+      if (rawMessage.toLowerCase().includes("duplicate key value")) {
+        sendError(response, 409, "Пользователь с таким email уже зарегистрирован.");
+        return;
+      }
+      sendError(response, 400, rawMessage);
     }
   });
 
