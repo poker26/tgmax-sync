@@ -127,6 +127,19 @@ document
   .getElementById("refreshBotMetaButton")
   .addEventListener("click", async () => loadTelegramBotMeta());
 
+document.getElementById("configureWebhookButton").addEventListener("click", async () => {
+  try {
+    const configureResponse = await apiRequest("/api/telegram/bot/configure-webhook", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    telegramBotOutput.textContent = JSON.stringify(configureResponse, null, 2);
+    await loadTelegramBotMeta();
+  } catch (error) {
+    telegramBotOutput.textContent = error.message;
+  }
+});
+
 document.getElementById("addChannelButton").addEventListener("click", async () => {
   try {
     const sourceChannelId = document.getElementById("sourceChannelInput").value;
@@ -159,11 +172,22 @@ document.getElementById("addChannelButton").addEventListener("click", async () =
 });
 
 async function setChannelStatus(channelId, status) {
-  await apiRequest(`/api/channels/${channelId}/status`, {
-    method: "PATCH",
-    body: JSON.stringify({ status }),
-  });
-  await loadChannels();
+  try {
+    const statusResponse = await apiRequest(`/api/channels/${channelId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    });
+    addChannelOutput.textContent =
+      status === "active"
+        ? "Channel started. Waiting for NEW Telegram posts via webhook."
+        : `Channel status changed to ${status}.`;
+    channelStatusOutput.textContent = JSON.stringify(statusResponse, null, 2);
+    await loadChannels();
+    await loadLogs();
+  } catch (error) {
+    addChannelOutput.textContent = `Action failed: ${error.message}`;
+    channelStatusOutput.textContent = `Action failed: ${error.message}`;
+  }
 }
 
 async function deleteChannel(channelId) {
@@ -201,11 +225,14 @@ async function loadChannels() {
       buttonElement.addEventListener("click", async () => {
         const action = buttonElement.dataset.action;
         if (action === "connect") {
-          await apiRequest("/api/telegram/bot/connect-channel", {
+          const connectResponse = await apiRequest("/api/telegram/bot/connect-channel", {
             method: "POST",
             body: JSON.stringify({ channelConfigId: channel.id }),
           });
+          channelStatusOutput.textContent = JSON.stringify(connectResponse, null, 2);
+          addChannelOutput.textContent = `Validate bot access: ${connectResponse.botStatus}`;
           await loadChannels();
+          await loadLogs();
         } else if (action === "status") {
           const statusPayload = await apiRequest(`/api/channels/${channel.id}/status`, { method: "GET" });
           channelStatusOutput.textContent = JSON.stringify(statusPayload, null, 2);

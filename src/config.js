@@ -12,13 +12,10 @@ const optional = (name, defaultValue = "") => process.env[name] ?? defaultValue;
 
 export const config = {
   telegram: {
-    apiId: parseInt(optional("TG_API_ID", "0"), 10),
-    apiHash: optional("TG_API_HASH"),
-    session: optional("TG_SESSION"),
     botToken: optional("TG_BOT_TOKEN"),
     botApiBaseUrl: optional("TG_BOT_API_BASE_URL", "https://api.telegram.org"),
     webhookSecret: optional("TG_BOT_WEBHOOK_SECRET"),
-    importLimit: parseInt(optional("TG_IMPORT_LIMIT", "200"), 10),
+    webhookPublicUrl: optional("TG_BOT_WEBHOOK_URL"),
   },
   supabase: {
     url: required("SUPABASE_URL"),

@@ -38,6 +38,25 @@ export async function getTelegramBotMe() {
   return requestTelegramBotApi("/getMe");
 }
 
+export async function getTelegramWebhookInfo() {
+  return requestTelegramBotApi("/getWebhookInfo");
+}
+
+export async function configureTelegramWebhook({ webhookUrl, secretToken = "" }) {
+  if (!String(webhookUrl ?? "").trim()) {
+    throw new Error("Webhook URL is required to configure Telegram webhook.");
+  }
+  return requestTelegramBotApi("/setWebhook", {
+    method: "POST",
+    jsonBody: {
+      url: String(webhookUrl).trim(),
+      secret_token: String(secretToken ?? "").trim() || undefined,
+      allowed_updates: ["channel_post", "edited_channel_post"],
+      drop_pending_updates: false,
+    },
+  });
+}
+
 export async function getTelegramChat(chatIdentifier) {
   return requestTelegramBotApi("/getChat", {
     method: "POST",

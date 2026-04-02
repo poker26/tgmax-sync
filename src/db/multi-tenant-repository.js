@@ -10,6 +10,15 @@ const TABLE_SYNC_STATE = "tg_channel_sync_state";
 const TABLE_MESSAGE_MAP = "tg_channel_message_map";
 const TABLE_BOT_UPDATES = "tg_bot_updates_log";
 
+function normalizeSourceChannelId(sourceChannelId) {
+  const normalizedValue = String(sourceChannelId ?? "").trim();
+  if (!normalizedValue) return normalizedValue;
+  if (normalizedValue.startsWith("@")) {
+    return normalizedValue.toLowerCase();
+  }
+  return normalizedValue;
+}
+
 export async function createUser({ email, passwordHash }) {
   const { data, error } = await supabase
     .from(TABLE_USERS)
@@ -126,7 +135,7 @@ export async function createChannelSyncConfig({
     .from(TABLE_CHANNEL_CONFIGS)
     .insert({
       user_id: userId,
-      source_channel_id: sourceChannelId,
+      source_channel_id: normalizeSourceChannelId(sourceChannelId),
       source_type: sourceType,
       source_channel_identifier: sourceChannelIdentifier,
       target_chat_id: String(targetChatId),
@@ -197,25 +206,47 @@ export async function listActiveChannelSyncConfigs() {
 export async function loadActiveChannelSyncConfigByTelegramChat({ chatId, chatUsername }) {
   const normalizedChatId = String(chatId ?? "").trim();
   const normalizedChatUsername = String(chatUsername ?? "").trim().toLowerCase();
-  let query = supabase
+  const channelLookupQuery = supabase
     .from(TABLE_CHANNEL_CONFIGS)
     .select("*")
     .eq("status", "active")
     .eq("source_type", "telegram_bot_channel");
 
-  if (normalizedChatId) {
-    query = query.or(
-      `source_channel_identifier.eq.${normalizedChatId},source_channel_id.eq.${normalizedChatId}`
-    );
-  } else if (normalizedChatUsername) {
-    query = query.eq("source_channel_id", normalizedChatUsername);
-  } else {
+  if (!normalizedChatId && !normalizedChatUsername) {
     return null;
   }
 
-  const { data, error } = await query.limit(1).maybeSingle();
-  if (error) throw new Error(`channel_sync_configs telegram chat lookup failed: ${error.message}`);
-  return data;
+  if (normalizedChatId) {
+    const idFilter =
+      normalizedChatUsername
+        ? `source_channel_identifier.eq.${normalizedChatId},source_channel_id.eq.${normalizedChatUsername}`
+        : `source_channel_identifier.eq.${normalizedChatId},source_channel_id.eq.${normalizedChatId}`;
+    const { data: byIdentifier, error: byIdentifierError } = await channelLookupQuery
+      .or(idFilter)
+      .limit(1)
+      .maybeSingle();
+    if (byIdentifierError) {
+      throw new Error(`channel_sync_configs telegram chat lookup failed: ${byIdentifierError.message}`);
+    }
+    if (byIdentifier) return byIdentifier;
+  }
+
+  if (!normalizedChatUsername) {
+    return null;
+  }
+
+  const { data: byUsername, error: byUsernameError } = await supabase
+    .from(TABLE_CHANNEL_CONFIGS)
+    .select("*")
+    .eq("status", "active")
+    .eq("source_type", "telegram_bot_channel")
+    .eq("source_channel_id", normalizedChatUsername)
+    .limit(1)
+    .maybeSingle();
+  if (byUsernameError) {
+    throw new Error(`channel_sync_configs telegram username lookup failed: ${byUsernameError.message}`);
+  }
+  return byUsername;
 }
 
 export async function updateChannelBotConnectionStatus({
@@ -233,7 +264,7 @@ export async function updateChannelBotConnectionStatus({
     updated_at: new Date().toISOString(),
   };
   if (sourceChannelId) {
-    updatePayload.source_channel_id = String(sourceChannelId).trim();
+    updatePayload.source_channel_id = normalizeSourceChannelId(sourceChannelId);
   }
   const { data, error } = await supabase
     .from(TABLE_CHANNEL_CONFIGS)

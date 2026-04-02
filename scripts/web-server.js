@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { config } from "../src/config.js";
 import {
+  addSyncJobLog,
   countUsers,
   createChannelSyncConfig,
   deleteChannelSyncConfig,
@@ -29,9 +30,11 @@ import {
   resolveAuthenticatedUser,
 } from "../src/auth.js";
 import {
+  configureTelegramWebhook,
   getTelegramBotMe,
   getTelegramChat,
   getTelegramChatMember,
+  getTelegramWebhookInfo,
   normalizeTelegramChannelPostUpdate,
 } from "../src/telegram/bot-api.js";
 import { startSyncEngine } from "../src/sync/engine.js";
@@ -49,6 +52,32 @@ function parsePositiveInteger(rawValue, fallbackValue) {
     return fallbackValue;
   }
   return parsedValue;
+}
+
+async function appendChannelDebugLog({
+  userId,
+  configId,
+  level = "info",
+  message,
+  details = {},
+}) {
+  try {
+    await addSyncJobLog({
+      userId,
+      configId,
+      level,
+      message,
+      details,
+    });
+  } catch (error) {
+    console.warn("[debug-log] failed to persist channel log:", error.message);
+  }
+}
+
+function buildWebhookTargetUrl() {
+  const configuredBaseUrl = String(config.telegram.webhookPublicUrl ?? "").trim().replace(/\/+$/, "");
+  if (!configuredBaseUrl) return "";
+  return `${configuredBaseUrl}/api/webhooks/telegram`;
 }
 
 async function requireAuthenticatedUser(request, response, next) {
@@ -172,6 +201,16 @@ function createApiServer() {
         pollIntervalMs: parsePositiveInteger(request.body?.pollIntervalMs, 30000),
         pollLimit: parsePositiveInteger(request.body?.pollLimit, 200),
       });
+      await appendChannelDebugLog({
+        userId: request.auth.user.id,
+        configId: createdConfig.id,
+        level: "info",
+        message: "Channel config created.",
+        details: {
+          sourceChannelId: createdConfig.source_channel_id,
+          targetChatId: createdConfig.target_chat_id,
+        },
+      });
       response.status(201).json({ ok: true, channel: createdConfig });
     } catch (error) {
       sendError(response, 400, error.message);
@@ -193,10 +232,33 @@ function createApiServer() {
         sendError(response, 400, "status must be active, paused, or disabled.");
         return;
       }
+      if (nextStatus === "active" && channelConfig.bot_membership_status !== "connected") {
+        await appendChannelDebugLog({
+          userId: request.auth.user.id,
+          configId: channelConfig.id,
+          level: "warn",
+          message: "Start rejected: Telegram bot is not connected to channel.",
+          details: {
+            botMembershipStatus: channelConfig.bot_membership_status,
+            requestedStatus: nextStatus,
+          },
+        });
+        sendError(response, 400, "Cannot start sync: Telegram bot is not connected to the channel.");
+        return;
+      }
       const updatedConfig = await updateChannelSyncConfigStatus({
         userId: request.auth.user.id,
         configId: channelConfig.id,
         status: nextStatus,
+      });
+      await addSyncJobLog({
+        userId: request.auth.user.id,
+        configId: channelConfig.id,
+        level: "info",
+        message: `Channel status changed to ${nextStatus}.`,
+        details: {
+          botMembershipStatus: updatedConfig.bot_membership_status,
+        },
       });
       response.status(200).json({ ok: true, channel: updatedConfig });
     } catch (error) {
@@ -245,12 +307,43 @@ function createApiServer() {
   app.get("/api/telegram/bot/meta", requireAuthenticatedUser, async (request, response) => {
     try {
       const botProfile = await getTelegramBotMe();
+      const webhookInfo = await getTelegramWebhookInfo();
       response.status(200).json({
         ok: true,
         botUsername: botProfile?.username ? `@${botProfile.username}` : null,
         botId: botProfile?.id ?? null,
+        webhook: {
+          url: webhookInfo?.url ?? "",
+          hasCustomCertificate: Boolean(webhookInfo?.has_custom_certificate),
+          pendingUpdateCount: Number(webhookInfo?.pending_update_count ?? 0),
+          lastErrorDate: webhookInfo?.last_error_date ?? null,
+          lastErrorMessage: webhookInfo?.last_error_message ?? null,
+          expectedUrl: buildWebhookTargetUrl(),
+        },
         onboardingHint:
           "Add this bot to your Telegram channel as administrator with permission to post/read channel messages.",
+      });
+    } catch (error) {
+      sendError(response, 500, error.message);
+    }
+  });
+
+  app.post("/api/telegram/bot/configure-webhook", requireAuthenticatedUser, async (request, response) => {
+    try {
+      const webhookUrl = buildWebhookTargetUrl();
+      if (!webhookUrl) {
+        sendError(response, 400, "TG_BOT_WEBHOOK_URL is not configured on server.");
+        return;
+      }
+      await configureTelegramWebhook({
+        webhookUrl,
+        secretToken: config.telegram.webhookSecret,
+      });
+      const webhookInfo = await getTelegramWebhookInfo();
+      response.status(200).json({
+        ok: true,
+        webhook: webhookInfo,
+        message: "Telegram webhook configured successfully.",
       });
     } catch (error) {
       sendError(response, 500, error.message);
@@ -270,6 +363,16 @@ function createApiServer() {
         return;
       }
 
+      await appendChannelDebugLog({
+        userId: request.auth.user.id,
+        configId: channelConfig.id,
+        level: "info",
+        message: "Validate bot access started.",
+        details: {
+          sourceChannelId: channelConfig.source_channel_id,
+        },
+      });
+
       const chatData = await getTelegramChat(channelConfig.source_channel_id);
       const botProfile = await getTelegramBotMe();
       const botMember = await getTelegramChatMember(chatData.id, botProfile.id);
@@ -285,6 +388,16 @@ function createApiServer() {
         sourceChannelId: normalizedChannelUsername,
         botMembershipStatus: nextStatus,
       });
+      await appendChannelDebugLog({
+        userId: request.auth.user.id,
+        configId: channelConfig.id,
+        level: hasRequiredPermissions ? "info" : "warn",
+        message: `Validate bot access finished with status: ${nextStatus}.`,
+        details: {
+          chatId: String(chatData.id),
+          memberStatus,
+        },
+      });
       response.status(200).json({
         ok: true,
         channel: updatedConfig,
@@ -292,6 +405,7 @@ function createApiServer() {
         chatId: String(chatData.id),
       });
     } catch (error) {
+      console.warn("[connect-channel] failed:", error.message);
       sendError(response, 400, error.message);
     }
   });
@@ -350,11 +464,26 @@ function createApiServer() {
         chatUsername: normalizedUpdate.chatUsername,
       });
       if (!channelConfig) {
+        console.warn("[telegram-webhook] Unknown channel mapping", {
+          chatId: normalizedUpdate.chatId,
+          chatUsername: normalizedUpdate.chatUsername,
+        });
         response.status(200).json({ ok: true, ignored: true, reason: "unknown_channel" });
         return;
       }
 
       await markChannelWebhookUpdateSeen(channelConfig.id);
+      await appendChannelDebugLog({
+        userId: channelConfig.user_id,
+        configId: channelConfig.id,
+        level: "debug",
+        message: "Telegram webhook update received.",
+        details: {
+          updateId: normalizedUpdate.updateId,
+          eventType: normalizedUpdate.eventType,
+          sourceMessageId: normalizedUpdate.sourceMessageId,
+        },
+      });
       const updateLogResult = await recordBotWebhookUpdate({
         userId: channelConfig.user_id,
         configId: channelConfig.id,
@@ -364,6 +493,15 @@ function createApiServer() {
         payload: normalizedUpdate,
       });
       if (!updateLogResult.queued) {
+        await appendChannelDebugLog({
+          userId: channelConfig.user_id,
+          configId: channelConfig.id,
+          level: "debug",
+          message: "Telegram webhook duplicate ignored.",
+          details: {
+            updateId: normalizedUpdate.updateId,
+          },
+        });
         response.status(200).json({ ok: true, ignored: true, reason: "duplicate_update" });
         return;
       }
@@ -377,8 +515,20 @@ function createApiServer() {
         externalEventId: String(normalizedUpdate.updateId),
         payload: normalizedUpdate,
       });
+      await appendChannelDebugLog({
+        userId: channelConfig.user_id,
+        configId: channelConfig.id,
+        level: "info",
+        message: "Telegram webhook update queued for sync.",
+        details: {
+          updateId: normalizedUpdate.updateId,
+          eventType: normalizedUpdate.eventType,
+          sourceMessageId: normalizedUpdate.sourceMessageId,
+        },
+      });
       response.status(200).json({ ok: true, queued: true });
     } catch (error) {
+      console.error("[telegram-webhook] failed:", error.message);
       sendError(response, 500, error.message);
     }
   });
