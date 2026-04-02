@@ -203,13 +203,18 @@ function createApiServer() {
       const telegramWebhookInfo = await getTelegramWebhookInfo();
       const expectedWebhookUrl = buildWebhookTargetUrl();
       const currentWebhookUrl = String(telegramWebhookInfo?.url ?? "").trim();
+      const pendingUpdateCount = Number(telegramWebhookInfo?.pending_update_count ?? 0);
+      const lastErrorEpochSeconds = Number(telegramWebhookInfo?.last_error_date ?? 0);
+      const nowEpochSeconds = Math.floor(Date.now() / 1000);
+      const lastErrorAgeSeconds =
+        lastErrorEpochSeconds > 0 ? Math.max(0, nowEpochSeconds - lastErrorEpochSeconds) : null;
+      const isRecentWebhookError =
+        typeof lastErrorAgeSeconds === "number" && lastErrorAgeSeconds <= 6 * 60 * 60;
 
       integrationState.telegram.botUsername = telegramBotProfile?.username
         ? `@${telegramBotProfile.username}`
         : null;
-      integrationState.telegram.pendingUpdateCount = Number(
-        telegramWebhookInfo?.pending_update_count ?? 0
-      );
+      integrationState.telegram.pendingUpdateCount = pendingUpdateCount;
 
       if (!currentWebhookUrl) {
         integrationState.telegram.status = "warn";
@@ -219,12 +224,12 @@ function createApiServer() {
         integrationState.telegram.status = "warn";
         integrationState.telegram.text =
           "Telegram-бот подключен, но адрес входящих событий отличается от ожидаемого.";
-      } else if (telegramWebhookInfo?.last_error_message) {
+      } else if (telegramWebhookInfo?.last_error_message && (isRecentWebhookError || pendingUpdateCount > 0)) {
         integrationState.telegram.status = "warn";
         integrationState.telegram.text =
-          "Telegram-бот подключен, но Telegram недавно сообщал об ошибке доставки.";
+          "Telegram-бот подключен, но сейчас есть проблема с доставкой событий. Нажмите кнопку настройки и попробуйте снова.";
       } else {
-        integrationState.telegram.text = "Telegram-бот подключен и готов к приему новых постов.";
+        integrationState.telegram.text = "Telegram-бот подключен и готов к работе.";
       }
     } catch (error) {
       integrationState.telegram.status = "error";

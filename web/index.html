@@ -138,6 +138,28 @@
         margin-bottom: 8px;
       }
 
+      .instructionSubpanel {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #dbeafe;
+        background: #f8fbff;
+      }
+
+      .instructionSubpanelTitle {
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
+
+      .instructionSubpanel ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      .instructionSubpanel li {
+        margin-bottom: 6px;
+      }
+
       .linksGrid {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -268,6 +290,16 @@
           </ol>
           <div id="instructionTip" class="statusLine">
             Никаких сложных технических шагов не требуется.
+          </div>
+          <div class="instructionSubpanel">
+            <div class="instructionSubpanelTitle">Если хотите сделать первичный перенос старых постов</div>
+            <ul>
+              <li>Откройте ваш канал в веб-версии Max и скопируйте `chat id` из адреса (например, из `https://web.max.ru/-72781323264178`).</li>
+              <li>Добавьте бота <b>ГазетаГазета</b> в подписчики канала и выдайте права администратора на публикацию.</li>
+              <li>Укажите Telegram-канал в формате `@ваш_канал` и создайте связь.</li>
+              <li>Сначала выберите тестовый перенос (5 свежих постов), затем при необходимости запустите полный перенос.</li>
+              <li>После завершения первичного переноса можно убрать бота из администраторов, если постоянная синхронизация не нужна.</li>
+            </ul>
           </div>
           <div class="statusLine" style="margin-top: 10px;">
             Важно знать:
