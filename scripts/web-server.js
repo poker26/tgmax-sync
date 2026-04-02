@@ -37,6 +37,7 @@ import {
   getTelegramWebhookInfo,
   normalizeTelegramChannelPostUpdate,
 } from "../src/telegram/bot-api.js";
+import { getMaxBotMe } from "../src/max/api.js";
 import { startSyncEngine } from "../src/sync/engine.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -169,6 +170,79 @@ function createApiServer() {
 
   app.get("/api/me", requireAuthenticatedUser, async (request, response) => {
     response.status(200).json({ ok: true, user: request.auth.user });
+  });
+
+  app.get("/api/integration/check", requireAuthenticatedUser, async (request, response) => {
+    const integrationState = {
+      ok: true,
+      overallStatus: "ok",
+      summary: "Подключения в порядке.",
+      telegram: {
+        status: "ok",
+        text: "Telegram-бот подключен.",
+      },
+      max: {
+        status: "ok",
+        text: "Max-бот подключен.",
+      },
+      note: "Права Max-бота в конкретном канале проверяются при первой отправке сообщения.",
+    };
+
+    try {
+      const telegramBotProfile = await getTelegramBotMe();
+      const telegramWebhookInfo = await getTelegramWebhookInfo();
+      const expectedWebhookUrl = buildWebhookTargetUrl();
+      const currentWebhookUrl = String(telegramWebhookInfo?.url ?? "").trim();
+
+      integrationState.telegram.botUsername = telegramBotProfile?.username
+        ? `@${telegramBotProfile.username}`
+        : null;
+      integrationState.telegram.pendingUpdateCount = Number(
+        telegramWebhookInfo?.pending_update_count ?? 0
+      );
+
+      if (!currentWebhookUrl) {
+        integrationState.telegram.status = "warn";
+        integrationState.telegram.text =
+          "Telegram-бот работает, но входящий адрес еще не настроен. Нажмите кнопку настройки.";
+      } else if (expectedWebhookUrl && currentWebhookUrl !== expectedWebhookUrl) {
+        integrationState.telegram.status = "warn";
+        integrationState.telegram.text =
+          "Telegram-бот подключен, но адрес входящих событий отличается от ожидаемого.";
+      } else if (telegramWebhookInfo?.last_error_message) {
+        integrationState.telegram.status = "warn";
+        integrationState.telegram.text =
+          "Telegram-бот подключен, но Telegram недавно сообщал об ошибке доставки.";
+      } else {
+        integrationState.telegram.text = "Telegram-бот подключен и готов к приему новых постов.";
+      }
+    } catch (error) {
+      integrationState.telegram.status = "error";
+      integrationState.telegram.text =
+        "Не удалось проверить Telegram-бота. Проверьте настройки бота на сервере.";
+      integrationState.telegram.details = error.message;
+    }
+
+    try {
+      const maxBotProfile = await getMaxBotMe();
+      integrationState.max.botId = String(maxBotProfile?.user_id ?? maxBotProfile?.id ?? "");
+      integrationState.max.text = "Max-бот подключен и отвечает.";
+    } catch (error) {
+      integrationState.max.status = "error";
+      integrationState.max.text = "Не удалось проверить Max-бота. Проверьте токен Max-бота.";
+      integrationState.max.details = error.message;
+    }
+
+    const statusList = [integrationState.telegram.status, integrationState.max.status];
+    if (statusList.includes("error")) {
+      integrationState.overallStatus = "error";
+      integrationState.summary = "Есть проблема подключения. Исправьте ее и попробуйте снова.";
+    } else if (statusList.includes("warn")) {
+      integrationState.overallStatus = "warn";
+      integrationState.summary = "Подключение частично готово. Нужна небольшая донастройка.";
+    }
+
+    response.status(200).json(integrationState);
   });
 
   app.get("/api/channels", requireAuthenticatedUser, async (request, response) => {

@@ -3,96 +3,323 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>tgmax-sync</title>
+    <title>Синхронизация Telegram -> Max</title>
     <style>
-      body { font-family: sans-serif; margin: 20px; max-width: 1000px; }
-      input, button, textarea, select { margin: 4px 0; padding: 8px; width: 100%; }
-      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-      .panel { border: 1px solid #ddd; padding: 12px; margin-bottom: 12px; border-radius: 8px; }
-      .hidden { display: none; }
-      pre { background: #f7f7f7; padding: 8px; overflow-x: auto; }
-      .channel { border: 1px solid #eee; padding: 8px; margin-bottom: 8px; border-radius: 6px; }
+      :root {
+        --bg: #f8fafc;
+        --surface: #ffffff;
+        --border: #e2e8f0;
+        --primary: #2563eb;
+        --primary-hover: #1d4ed8;
+        --success: #166534;
+        --danger: #b91c1c;
+        --muted: #64748b;
+        --text: #0f172a;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .page {
+        width: 100%;
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 16px;
+      }
+
+      h1 {
+        font-size: 26px;
+        margin: 0 0 6px 0;
+      }
+
+      .subtitle {
+        margin: 0 0 16px 0;
+        color: var(--muted);
+      }
+
+      .panel {
+        border: 1px solid var(--border);
+        background: var(--surface);
+        padding: 14px;
+        margin-bottom: 14px;
+        border-radius: 10px;
+      }
+
+      .panel h2 {
+        margin: 0 0 10px 0;
+        font-size: 20px;
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .column {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      label {
+        font-weight: 600;
+        font-size: 14px;
+      }
+
+      input,
+      select,
+      button {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-size: 14px;
+      }
+
+      button {
+        background: var(--primary);
+        color: #fff;
+        border: none;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: var(--primary-hover);
+      }
+
+      .secondaryButton {
+        background: #475569;
+      }
+
+      .dangerButton {
+        background: var(--danger);
+      }
+
+      .statusLine {
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: #eff6ff;
+        color: #1e3a8a;
+        border: 1px solid #bfdbfe;
+        font-size: 14px;
+      }
+
+      .statusLine.success {
+        background: #ecfdf3;
+        color: var(--success);
+        border-color: #bbf7d0;
+      }
+
+      .statusLine.error {
+        background: #fef2f2;
+        color: var(--danger);
+        border-color: #fecaca;
+      }
+
+      .instructionList {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      .instructionList li {
+        margin-bottom: 8px;
+      }
+
+      .linksGrid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+
+      .linkCard {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+        cursor: pointer;
+        background: #fff;
+        color: var(--text);
+        text-align: left;
+      }
+
+      .linkCard.selected {
+        border-color: #60a5fa;
+        box-shadow: 0 0 0 2px #dbeafe;
+      }
+
+      .linkTitle {
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
+
+      .linkMeta {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .emptyState {
+        color: var(--muted);
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        padding: 14px;
+      }
+
+      .actionsRow {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 10px;
+      }
+
+      details {
+        margin-top: 8px;
+      }
+
+      pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 8px;
+        padding: 10px;
+        overflow-x: auto;
+        font-size: 12px;
+      }
+
+      @media (max-width: 768px) {
+        .row,
+        .linksGrid,
+        .actionsRow {
+          grid-template-columns: 1fr;
+        }
+
+        .page {
+          padding: 12px;
+        }
+
+        h1 {
+          font-size: 22px;
+        }
+      }
     </style>
   </head>
   <body>
-    <h2>tgmax-sync</h2>
+    <div class="page">
+      <h1>Синхронизация каналов</h1>
+      <p class="subtitle">Просто свяжите Telegram-канал с Max-каналом и управляйте публикацией в одном месте.</p>
 
-    <div id="authPanel" class="panel">
-      <h3>Login</h3>
-      <div id="bootstrapHint"></div>
-      <div class="row">
-        <div>
-          <label>Email</label>
-          <input id="emailInput" type="email" />
-        </div>
-        <div>
-          <label>Password</label>
-          <input id="passwordInput" type="password" />
-        </div>
-      </div>
-      <button id="loginButton">Login</button>
-      <button id="registerButton">Register first user</button>
-      <pre id="authOutput"></pre>
-    </div>
-
-    <div id="appPanel" class="hidden">
-      <div class="panel">
-        <h3>Telegram Bot onboarding</h3>
-        <div id="telegramBotHint"></div>
-        <button id="refreshBotMetaButton">Refresh Telegram bot info</button>
-        <button id="configureWebhookButton">Configure Telegram webhook</button>
-        <pre id="telegramBotOutput"></pre>
-      </div>
-
-      <div class="panel">
-        <h3>Add sync channel</h3>
+      <div id="authPanel" class="panel">
+        <h2>Вход</h2>
+        <div id="bootstrapHint" class="statusLine"></div>
         <div class="row">
-          <div>
-            <label>Source TG channel</label>
-            <input id="sourceChannelInput" placeholder="@channel" />
+          <div class="column">
+            <label>Email</label>
+            <input id="emailInput" type="email" placeholder="you@example.com" />
           </div>
-          <div>
-            <label>Target MAX chat id</label>
-            <input id="targetChatInput" placeholder="-1234567890" />
-          </div>
-        </div>
-        <div class="row">
-          <div>
-            <label>Poll interval ms</label>
-            <input id="pollIntervalInput" value="30000" />
-          </div>
-          <div>
-            <label>Poll limit</label>
-            <input id="pollLimitInput" value="200" />
+          <div class="column">
+            <label>Пароль</label>
+            <input id="passwordInput" type="password" placeholder="Минимум 8 символов" />
           </div>
         </div>
-        <button id="addChannelButton">Add channel</button>
-        <div id="addChannelOutput"></div>
+        <div class="actionsRow" style="margin-top: 10px;">
+          <button id="loginButton">Войти</button>
+          <button id="registerButton" class="secondaryButton">Создать первый аккаунт</button>
+          <div></div>
+        </div>
+        <div id="authOutput" class="statusLine" style="margin-top: 10px;"></div>
       </div>
 
-      <div class="panel">
-        <h3>My channels</h3>
-        <button id="refreshChannelsButton">Refresh channels</button>
-        <div id="channelsContainer"></div>
-        <pre id="channelStatusOutput"></pre>
-      </div>
+      <div id="appPanel" class="hidden">
+        <div class="panel">
+          <div class="actionsRow">
+            <div></div>
+            <div></div>
+            <button id="logoutButton" class="secondaryButton">Выйти</button>
+          </div>
+        </div>
 
-      <div class="panel">
-        <h3>Logs</h3>
-        <div class="row">
-          <div>
-            <label>Filter by channel</label>
+        <div id="instructionPanel" class="panel">
+          <h2>1) Как подключить</h2>
+          <ol class="instructionList">
+            <li>Добавьте Telegram-бота в ваш Telegram-канал как администратора.</li>
+            <li>Добавьте Max-бота в ваш Max-канал с правом публиковать сообщения.</li>
+            <li>Нажмите «Проверить подключение ботов».</li>
+            <li>Создайте связь каналов и запустите ее.</li>
+          </ol>
+          <div id="instructionTip" class="statusLine">
+            Никаких сложных технических шагов не требуется.
+          </div>
+        </div>
+
+        <div id="connectionCheckPanel" class="panel">
+          <h2>2) Проверить подключение ботов</h2>
+          <div class="actionsRow">
+            <button id="checkConnectionsButton">Проверить подключение ботов</button>
+            <button id="configureWebhookButton" class="secondaryButton">Настроить Telegram-подключение</button>
+            <button id="refreshBotMetaButton" class="secondaryButton">Обновить статус</button>
+          </div>
+          <div id="connectionCheckOutput" class="statusLine" style="margin-top: 10px;"></div>
+        </div>
+
+        <div id="createLinkPanel" class="panel">
+          <h2>3) Создать связь</h2>
+          <div class="row">
+            <div class="column">
+              <label>Telegram-канал</label>
+              <input id="sourceChannelInput" placeholder="@my_channel" />
+            </div>
+            <div class="column">
+              <label>Max-канал (chat id)</label>
+              <input id="targetChatInput" placeholder="-1234567890" />
+            </div>
+          </div>
+          <div class="actionsRow" style="margin-top: 10px;">
+            <button id="addChannelButton">Создать связь</button>
+            <button id="refreshChannelsButton" class="secondaryButton">Обновить список</button>
+            <div></div>
+          </div>
+          <div id="addChannelOutput" class="statusLine" style="margin-top: 10px;"></div>
+        </div>
+
+        <div id="linksListPanel" class="panel">
+          <h2>4) Все связи</h2>
+          <div id="linksEmptyState" class="emptyState">Пока нет ни одной связи. Создайте первую выше.</div>
+          <div id="channelsContainer" class="linksGrid"></div>
+        </div>
+
+        <div id="selectedLinkActionPanel" class="panel">
+          <h2>5) Управление выбранной связью</h2>
+          <div id="selectedLinkTitle" class="statusLine">Выберите связь из списка выше.</div>
+          <div class="actionsRow" style="margin-top: 10px;">
+            <button id="startLinkButton">Запустить</button>
+            <button id="stopLinkButton" class="secondaryButton">Остановить</button>
+            <button id="deleteLinkButton" class="dangerButton">Удалить</button>
+          </div>
+          <button id="validateBotAccessButton" class="secondaryButton" style="margin-top: 10px;">Проверить доступ бота</button>
+          <div id="channelStatusOutput" class="statusLine" style="margin-top: 10px;"></div>
+        </div>
+
+        <details class="panel">
+          <summary>Технический раздел (для поддержки)</summary>
+          <div style="margin-top: 10px;">
+            <label>Фильтр по связи</label>
             <select id="logsChannelFilter">
-              <option value="">All channels</option>
+              <option value="">Все связи</option>
             </select>
+            <button id="refreshLogsButton" class="secondaryButton" style="margin-top: 8px;">Обновить технические события</button>
+            <pre id="logsOutput"></pre>
+            <pre id="telegramBotOutput"></pre>
           </div>
-          <div>
-            <label>Limit</label>
-            <input id="logsLimitInput" value="200" />
-          </div>
-        </div>
-        <button id="refreshLogsButton">Refresh logs</button>
-        <pre id="logsOutput"></pre>
+        </details>
       </div>
     </div>
 

@@ -2,14 +2,33 @@ const authPanel = document.getElementById("authPanel");
 const appPanel = document.getElementById("appPanel");
 const authOutput = document.getElementById("authOutput");
 const telegramBotOutput = document.getElementById("telegramBotOutput");
-const telegramBotHint = document.getElementById("telegramBotHint");
 const logsOutput = document.getElementById("logsOutput");
 const channelsContainer = document.getElementById("channelsContainer");
 const channelStatusOutput = document.getElementById("channelStatusOutput");
-const logsChannelFilter = document.getElementById("logsChannelFilter");
-const bootstrapHint = document.getElementById("bootstrapHint");
-const registerButton = document.getElementById("registerButton");
+const connectionCheckOutput = document.getElementById("connectionCheckOutput");
 const addChannelOutput = document.getElementById("addChannelOutput");
+const bootstrapHint = document.getElementById("bootstrapHint");
+const instructionTip = document.getElementById("instructionTip");
+const selectedLinkTitle = document.getElementById("selectedLinkTitle");
+const linksEmptyState = document.getElementById("linksEmptyState");
+const logsChannelFilter = document.getElementById("logsChannelFilter");
+const registerButton = document.getElementById("registerButton");
+
+const state = {
+  selectedLinkId: "",
+  channels: [],
+};
+
+function setStatus(element, text, statusType = "info") {
+  element.textContent = text;
+  element.classList.remove("success", "error");
+  if (statusType === "success") {
+    element.classList.add("success");
+  }
+  if (statusType === "error") {
+    element.classList.add("error");
+  }
+}
 
 function getToken() {
   return localStorage.getItem("tgmax_token") || "";
@@ -23,14 +42,41 @@ function setToken(token) {
   localStorage.setItem("tgmax_token", token);
 }
 
+function toFriendlyError(error) {
+  const errorText = String(error?.message || "").toLowerCase();
+  if (errorText.includes("invalid credentials")) {
+    return "Неверный email или пароль.";
+  }
+  if (errorText.includes("email and password")) {
+    return "Введите email и пароль.";
+  }
+  if (errorText.includes("min 8")) {
+    return "Пароль должен быть не короче 8 символов.";
+  }
+  if (errorText.includes("sourcechannelid")) {
+    return "Укажите Telegram-канал в формате @название_канала.";
+  }
+  if (errorText.includes("targetchatid")) {
+    return "Укажите корректный numeric chat id канала Max.";
+  }
+  if (errorText.includes("not connected")) {
+    return "Бот Telegram еще не подключен к каналу. Нажмите 'Проверить доступ бота'.";
+  }
+  if (errorText.includes("unauthorized")) {
+    return "Сессия истекла. Войдите заново.";
+  }
+  return "Операция не выполнена. Попробуйте еще раз.";
+}
+
 async function apiRequest(path, options = {}) {
-  const headers = options.headers || {};
-  headers["content-type"] = headers["content-type"] || "application/json";
+  const requestHeaders = options.headers || {};
+  requestHeaders["content-type"] = requestHeaders["content-type"] || "application/json";
   const token = getToken();
   if (token) {
-    headers.authorization = `Bearer ${token}`;
+    requestHeaders.authorization = `Bearer ${token}`;
   }
-  const response = await fetch(path, { ...options, headers });
+
+  const response = await fetch(path, { ...options, headers: requestHeaders });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(body.error || `HTTP ${response.status}`);
@@ -43,6 +89,275 @@ function renderAuthState(isAuthenticated) {
   appPanel.classList.toggle("hidden", !isAuthenticated);
 }
 
+function updateSelectedLinkPanel() {
+  const selectedChannel = state.channels.find((channel) => channel.id === state.selectedLinkId);
+  if (!selectedChannel) {
+    setStatus(selectedLinkTitle, "Выберите связь из списка выше.");
+    return;
+  }
+  const readableStatus =
+    selectedChannel.status === "active"
+      ? "Запущена"
+      : selectedChannel.status === "paused"
+        ? "Остановлена"
+        : "Отключена";
+  setStatus(
+    selectedLinkTitle,
+    `Выбрана связь: ${selectedChannel.source_channel_id} -> ${selectedChannel.target_chat_id}. Статус: ${readableStatus}.`
+  );
+}
+
+function renderChannels() {
+  channelsContainer.innerHTML = "";
+  const previousFilterValue = logsChannelFilter.value;
+  logsChannelFilter.innerHTML = '<option value="">Все связи</option>';
+
+  if (!state.channels.length) {
+    linksEmptyState.classList.remove("hidden");
+  } else {
+    linksEmptyState.classList.add("hidden");
+  }
+
+  state.channels.forEach((channel) => {
+    const filterOption = document.createElement("option");
+    filterOption.value = channel.id;
+    filterOption.textContent = `${channel.source_channel_id} -> ${channel.target_chat_id}`;
+    logsChannelFilter.appendChild(filterOption);
+
+    const channelCard = document.createElement("button");
+    channelCard.type = "button";
+    channelCard.className = "linkCard";
+    if (channel.id === state.selectedLinkId) {
+      channelCard.classList.add("selected");
+    }
+    channelCard.innerHTML = `
+      <div class="linkTitle">${channel.source_channel_id} -> ${channel.target_chat_id}</div>
+      <div class="linkMeta">Состояние: ${channel.status}</div>
+      <div class="linkMeta">Доступ Telegram-бота: ${channel.bot_membership_status ?? "не проверен"}</div>
+    `;
+    channelCard.addEventListener("click", () => {
+      selectLink(channel.id);
+    });
+    channelsContainer.appendChild(channelCard);
+  });
+
+  if (previousFilterValue) {
+    logsChannelFilter.value = previousFilterValue;
+  }
+  updateSelectedLinkPanel();
+}
+
+async function loadBootstrapStatus() {
+  try {
+    const bootstrapStatus = await apiRequest("/api/auth/bootstrap-status", { method: "GET" });
+    if (bootstrapStatus.bootstrapAllowed) {
+      setStatus(
+        bootstrapHint,
+        "Первый пользователь еще не создан. Нажмите «Создать первый аккаунт»."
+      );
+      registerButton.disabled = false;
+    } else {
+      setStatus(bootstrapHint, "Аккаунт уже создан. Используйте обычный вход.");
+      registerButton.disabled = true;
+    }
+  } catch (error) {
+    setStatus(bootstrapHint, "Не удалось проверить состояние аккаунтов.", "error");
+    registerButton.disabled = false;
+  }
+}
+
+async function loadTelegramBotMeta() {
+  try {
+    const botMeta = await apiRequest("/api/telegram/bot/meta", { method: "GET" });
+    const botName = botMeta.botUsername || "Telegram-бот";
+    setStatus(instructionTip, `Для Telegram используйте ${botName}. Добавьте его администратором канала.`);
+    telegramBotOutput.textContent = JSON.stringify(botMeta, null, 2);
+  } catch (error) {
+    setStatus(instructionTip, "Не удалось получить данные Telegram-бота.", "error");
+    telegramBotOutput.textContent = toFriendlyError(error);
+  }
+}
+
+async function checkConnections() {
+  try {
+    setStatus(connectionCheckOutput, "Проверяем Telegram и Max...");
+    const checkResult = await apiRequest("/api/integration/check", { method: "GET" });
+    const statusType = checkResult.overallStatus === "error" ? "error" : checkResult.overallStatus === "warn" ? "info" : "success";
+    const message = [
+      checkResult.summary,
+      `Telegram: ${checkResult.telegram?.text ?? "нет данных"}`,
+      `Max: ${checkResult.max?.text ?? "нет данных"}`,
+      checkResult.note ?? "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    setStatus(connectionCheckOutput, message, statusType);
+  } catch (error) {
+    setStatus(connectionCheckOutput, toFriendlyError(error), "error");
+  }
+}
+
+async function loadChannels() {
+  const channelsResponse = await apiRequest("/api/channels", { method: "GET" });
+  state.channels = channelsResponse.channels || [];
+
+  if (
+    state.selectedLinkId &&
+    !state.channels.some((channel) => channel.id === state.selectedLinkId)
+  ) {
+    state.selectedLinkId = "";
+  }
+
+  if (!state.selectedLinkId && state.channels.length > 0) {
+    state.selectedLinkId = state.channels[0].id;
+  }
+
+  renderChannels();
+}
+
+async function createLink() {
+  try {
+    const sourceChannelId = document.getElementById("sourceChannelInput").value.trim();
+    const targetChatId = document.getElementById("targetChatInput").value.trim();
+
+    const createResponse = await apiRequest("/api/channels", {
+      method: "POST",
+      body: JSON.stringify({
+        sourceChannelId,
+        targetChatId,
+      }),
+    });
+
+    const newChannelId = createResponse?.channel?.id;
+    if (newChannelId) {
+      const connectResponse = await apiRequest("/api/telegram/bot/connect-channel", {
+        method: "POST",
+        body: JSON.stringify({ channelConfigId: newChannelId }),
+      });
+      const botStatusText =
+        connectResponse.botStatus === "connected"
+          ? "Доступ бота подтвержден."
+          : "Связь создана, но доступ Telegram-бота нужно проверить.";
+      setStatus(addChannelOutput, `Связь успешно создана. ${botStatusText}`, "success");
+      state.selectedLinkId = newChannelId;
+    } else {
+      setStatus(addChannelOutput, "Связь создана.", "success");
+    }
+
+    await loadChannels();
+    await loadLogs();
+  } catch (error) {
+    setStatus(addChannelOutput, toFriendlyError(error), "error");
+  }
+}
+
+function selectLink(linkId) {
+  state.selectedLinkId = linkId;
+  renderChannels();
+}
+
+async function setSelectedLinkStatus(nextStatus) {
+  if (!state.selectedLinkId) {
+    setStatus(channelStatusOutput, "Сначала выберите связь.", "error");
+    return;
+  }
+  try {
+    await apiRequest(`/api/channels/${state.selectedLinkId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: nextStatus }),
+    });
+
+    const successMessage =
+      nextStatus === "active"
+        ? "Связь запущена. Новые посты будут переноситься автоматически."
+        : "Связь остановлена.";
+    setStatus(channelStatusOutput, successMessage, "success");
+    await loadChannels();
+    await loadLogs();
+  } catch (error) {
+    setStatus(channelStatusOutput, toFriendlyError(error), "error");
+  }
+}
+
+async function validateSelectedLinkBotAccess() {
+  if (!state.selectedLinkId) {
+    setStatus(channelStatusOutput, "Сначала выберите связь.", "error");
+    return;
+  }
+  try {
+    const connectResponse = await apiRequest("/api/telegram/bot/connect-channel", {
+      method: "POST",
+      body: JSON.stringify({ channelConfigId: state.selectedLinkId }),
+    });
+    const isConnected = connectResponse.botStatus === "connected";
+    const message = isConnected
+      ? "Доступ Telegram-бота подтвержден."
+      : "Доступ Telegram-бота ограничен. Проверьте права администратора в канале.";
+    setStatus(channelStatusOutput, message, isConnected ? "success" : "error");
+    await loadChannels();
+    await loadLogs();
+  } catch (error) {
+    setStatus(channelStatusOutput, toFriendlyError(error), "error");
+  }
+}
+
+async function deleteSelectedLink() {
+  if (!state.selectedLinkId) {
+    setStatus(channelStatusOutput, "Сначала выберите связь.", "error");
+    return;
+  }
+
+  try {
+    await apiRequest(`/api/channels/${state.selectedLinkId}`, { method: "DELETE" });
+    setStatus(channelStatusOutput, "Связь удалена.", "success");
+    state.selectedLinkId = "";
+    await loadChannels();
+    await loadLogs();
+  } catch (error) {
+    setStatus(channelStatusOutput, toFriendlyError(error), "error");
+  }
+}
+
+async function loadLogs() {
+  try {
+    const query = new URLSearchParams();
+    query.set("limit", "200");
+    if (logsChannelFilter.value) {
+      query.set("channelId", logsChannelFilter.value);
+    }
+    const logsResponse = await apiRequest(`/api/logs?${query.toString()}`, { method: "GET" });
+    logsOutput.textContent = (logsResponse.logs || [])
+      .map((logRow) => `${logRow.created_at} [${logRow.level}] ${logRow.message}`)
+      .join("\n");
+  } catch (error) {
+    logsOutput.textContent = toFriendlyError(error);
+  }
+}
+
+async function configureTelegramConnection() {
+  try {
+    await apiRequest("/api/telegram/bot/configure-webhook", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    setStatus(connectionCheckOutput, "Telegram-подключение настроено. Можно повторить проверку.", "success");
+    await loadTelegramBotMeta();
+    await checkConnections();
+  } catch (error) {
+    setStatus(connectionCheckOutput, toFriendlyError(error), "error");
+  }
+}
+
+async function logout() {
+  try {
+    await apiRequest("/api/auth/logout", { method: "POST", body: JSON.stringify({}) });
+  } catch {
+    // intentionally ignored to allow local session cleanup
+  }
+  setToken("");
+  renderAuthState(false);
+}
+
 async function tryRestoreSession() {
   await loadBootstrapStatus();
   const token = getToken();
@@ -50,10 +365,12 @@ async function tryRestoreSession() {
     renderAuthState(false);
     return;
   }
+
   try {
     await apiRequest("/api/me", { method: "GET" });
     renderAuthState(true);
     await loadTelegramBotMeta();
+    await checkConnections();
     await loadChannels();
     await loadLogs();
   } catch {
@@ -62,209 +379,54 @@ async function tryRestoreSession() {
   }
 }
 
-async function loadBootstrapStatus() {
-  try {
-    const responseBody = await apiRequest("/api/auth/bootstrap-status", { method: "GET" });
-    if (responseBody.bootstrapAllowed) {
-      bootstrapHint.textContent = "No users found. Register first user, then login.";
-      registerButton.disabled = false;
-    } else {
-      bootstrapHint.textContent = "Bootstrap disabled: first user already exists.";
-      registerButton.disabled = true;
-    }
-  } catch (error) {
-    bootstrapHint.textContent = `Bootstrap status unavailable: ${error.message}`;
-    registerButton.disabled = false;
-  }
-}
-
 document.getElementById("loginButton").addEventListener("click", async () => {
   try {
-    const email = document.getElementById("emailInput").value;
+    const email = document.getElementById("emailInput").value.trim().toLowerCase();
     const password = document.getElementById("passwordInput").value;
-    const responseBody = await apiRequest("/api/auth/login", {
+    const loginResponse = await apiRequest("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
-    setToken(responseBody.token);
-    authOutput.textContent = "Login successful.";
+    setToken(loginResponse.token);
+    setStatus(authOutput, "Вход выполнен успешно.", "success");
     renderAuthState(true);
     await loadTelegramBotMeta();
+    await checkConnections();
     await loadChannels();
     await loadLogs();
   } catch (error) {
-    authOutput.textContent = error.message;
+    setStatus(authOutput, toFriendlyError(error), "error");
   }
 });
 
 document.getElementById("registerButton").addEventListener("click", async () => {
   try {
-    const email = document.getElementById("emailInput").value;
+    const email = document.getElementById("emailInput").value.trim().toLowerCase();
     const password = document.getElementById("passwordInput").value;
     await apiRequest("/api/auth/register", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
-    authOutput.textContent = "First user registered. Now login.";
+    setStatus(authOutput, "Аккаунт создан. Теперь войдите в систему.", "success");
     await loadBootstrapStatus();
   } catch (error) {
-    authOutput.textContent = error.message;
+    setStatus(authOutput, toFriendlyError(error), "error");
   }
 });
 
-async function loadTelegramBotMeta() {
-  try {
-    const botMeta = await apiRequest("/api/telegram/bot/meta", { method: "GET" });
-    telegramBotHint.textContent = `Добавьте ${botMeta.botUsername ?? "бота"} в ваш TG-канал администратором, затем подключите канал.`;
-    telegramBotOutput.textContent = JSON.stringify(botMeta, null, 2);
-  } catch (error) {
-    telegramBotHint.textContent = "Не удалось получить данные Telegram-бота.";
-    telegramBotOutput.textContent = error.message;
-  }
-}
-
+document.getElementById("logoutButton").addEventListener("click", logout);
+document.getElementById("refreshBotMetaButton").addEventListener("click", loadTelegramBotMeta);
+document.getElementById("configureWebhookButton").addEventListener("click", configureTelegramConnection);
+document.getElementById("checkConnectionsButton").addEventListener("click", checkConnections);
+document.getElementById("addChannelButton").addEventListener("click", createLink);
+document.getElementById("refreshChannelsButton").addEventListener("click", loadChannels);
+document.getElementById("startLinkButton").addEventListener("click", async () => setSelectedLinkStatus("active"));
+document.getElementById("stopLinkButton").addEventListener("click", async () => setSelectedLinkStatus("paused"));
+document.getElementById("deleteLinkButton").addEventListener("click", deleteSelectedLink);
 document
-  .getElementById("refreshBotMetaButton")
-  .addEventListener("click", async () => loadTelegramBotMeta());
-
-document.getElementById("configureWebhookButton").addEventListener("click", async () => {
-  try {
-    const configureResponse = await apiRequest("/api/telegram/bot/configure-webhook", {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
-    telegramBotOutput.textContent = JSON.stringify(configureResponse, null, 2);
-    await loadTelegramBotMeta();
-  } catch (error) {
-    telegramBotOutput.textContent = error.message;
-  }
-});
-
-document.getElementById("addChannelButton").addEventListener("click", async () => {
-  try {
-    const sourceChannelId = document.getElementById("sourceChannelInput").value;
-    const targetChatId = document.getElementById("targetChatInput").value;
-    const pollIntervalMs = Number.parseInt(document.getElementById("pollIntervalInput").value, 10);
-    const pollLimit = Number.parseInt(document.getElementById("pollLimitInput").value, 10);
-    const createdChannelResponse = await apiRequest("/api/channels", {
-      method: "POST",
-      body: JSON.stringify({
-        sourceChannelId,
-        targetChatId,
-        pollIntervalMs,
-        pollLimit,
-      }),
-    });
-    const channelConfigId = createdChannelResponse?.channel?.id;
-    if (channelConfigId) {
-      const connectResponse = await apiRequest("/api/telegram/bot/connect-channel", {
-        method: "POST",
-        body: JSON.stringify({ channelConfigId }),
-      });
-      addChannelOutput.textContent = `Channel created and bot validated. Status: ${connectResponse.botStatus}`;
-    } else {
-      addChannelOutput.textContent = "Channel created.";
-    }
-    await loadChannels();
-  } catch (error) {
-    addChannelOutput.textContent = error.message;
-  }
-});
-
-async function setChannelStatus(channelId, status) {
-  try {
-    const statusResponse = await apiRequest(`/api/channels/${channelId}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ status }),
-    });
-    addChannelOutput.textContent =
-      status === "active"
-        ? "Channel started. Waiting for NEW Telegram posts via webhook."
-        : `Channel status changed to ${status}.`;
-    channelStatusOutput.textContent = JSON.stringify(statusResponse, null, 2);
-    await loadChannels();
-    await loadLogs();
-  } catch (error) {
-    addChannelOutput.textContent = `Action failed: ${error.message}`;
-    channelStatusOutput.textContent = `Action failed: ${error.message}`;
-  }
-}
-
-async function deleteChannel(channelId) {
-  await apiRequest(`/api/channels/${channelId}`, { method: "DELETE" });
-  await loadChannels();
-}
-
-async function loadChannels() {
-  const responseBody = await apiRequest("/api/channels", { method: "GET" });
-  channelsContainer.innerHTML = "";
-  const previousFilterValue = logsChannelFilter.value;
-  logsChannelFilter.innerHTML = '<option value="">All channels</option>';
-  for (const channel of responseBody.channels) {
-    const optionElement = document.createElement("option");
-    optionElement.value = channel.id;
-    optionElement.textContent = `${channel.source_channel_id} -> ${channel.target_chat_id}`;
-    logsChannelFilter.appendChild(optionElement);
-
-    const channelElement = document.createElement("div");
-    channelElement.className = "channel";
-    channelElement.innerHTML = `
-      <div><b>${channel.source_channel_id}</b> -> <b>${channel.target_chat_id}</b></div>
-      <div>Status: ${channel.status}</div>
-      <div>Source type: ${channel.source_type ?? "telegram_bot_channel"}</div>
-      <div>Bot status: ${channel.bot_membership_status ?? "unknown"}</div>
-      <div>Poll: ${channel.poll_interval_ms}ms, limit ${channel.poll_limit}</div>
-      <button data-action="connect">Validate bot access</button>
-      <button data-action="status">Show status</button>
-      <button data-action="active">Start</button>
-      <button data-action="paused">Pause</button>
-      <button data-action="disabled">Disable</button>
-      <button data-action="delete">Delete</button>
-    `;
-    channelElement.querySelectorAll("button").forEach((buttonElement) => {
-      buttonElement.addEventListener("click", async () => {
-        const action = buttonElement.dataset.action;
-        if (action === "connect") {
-          const connectResponse = await apiRequest("/api/telegram/bot/connect-channel", {
-            method: "POST",
-            body: JSON.stringify({ channelConfigId: channel.id }),
-          });
-          channelStatusOutput.textContent = JSON.stringify(connectResponse, null, 2);
-          addChannelOutput.textContent = `Validate bot access: ${connectResponse.botStatus}`;
-          await loadChannels();
-          await loadLogs();
-        } else if (action === "status") {
-          const statusPayload = await apiRequest(`/api/channels/${channel.id}/status`, { method: "GET" });
-          channelStatusOutput.textContent = JSON.stringify(statusPayload, null, 2);
-        } else if (action === "delete") {
-          await deleteChannel(channel.id);
-        } else {
-          await setChannelStatus(channel.id, action);
-        }
-      });
-    });
-    channelsContainer.appendChild(channelElement);
-  }
-  logsChannelFilter.value = previousFilterValue;
-}
-
-async function loadLogs() {
-  const selectedChannelId = logsChannelFilter.value;
-  const logsLimitValue = Number.parseInt(document.getElementById("logsLimitInput").value, 10);
-  const safeLimit = Number.isFinite(logsLimitValue) && logsLimitValue > 0 ? logsLimitValue : 200;
-  const query = new URLSearchParams();
-  query.set("limit", String(safeLimit));
-  if (selectedChannelId) {
-    query.set("channelId", selectedChannelId);
-  }
-  const responseBody = await apiRequest(`/api/logs?${query.toString()}`, { method: "GET" });
-  logsOutput.textContent = responseBody.logs
-    .map((logRow) => `${logRow.created_at} [${logRow.level}] ${logRow.message}`)
-    .join("\n");
-}
-
-document.getElementById("refreshChannelsButton").addEventListener("click", () => loadChannels());
-document.getElementById("refreshLogsButton").addEventListener("click", () => loadLogs());
-logsChannelFilter.addEventListener("change", () => loadLogs());
+  .getElementById("validateBotAccessButton")
+  .addEventListener("click", validateSelectedLinkBotAccess);
+document.getElementById("refreshLogsButton").addEventListener("click", loadLogs);
+logsChannelFilter.addEventListener("change", loadLogs);
 
 tryRestoreSession();
