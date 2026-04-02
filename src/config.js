@@ -49,6 +49,9 @@ export const config = {
     port: parseInt(optional("WEB_PORT", "3030"), 10),
     sessionTtlHours: parseInt(optional("WEB_SESSION_TTL_HOURS", "72"), 10),
   },
+  initialImport: {
+    tg2maxProjectPath: optional("TG2MAX_PROJECT_PATH", ""),
+  },
 };
 
 export default config;

@@ -182,6 +182,17 @@
         gap: 10px;
       }
 
+      .singleActionRow {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+
+      .infoList {
+        margin: 8px 0 0 0;
+        padding-left: 18px;
+      }
+
       details {
         margin-top: 8px;
       }
@@ -251,12 +262,20 @@
           <h2>1) Как подключить</h2>
           <ol class="instructionList">
             <li>Добавьте Telegram-бота в ваш Telegram-канал как администратора.</li>
-            <li>Добавьте Max-бота в ваш Max-канал с правом публиковать сообщения.</li>
+            <li>Добавьте Max-бота <b>ГазетаГазета</b> в ваш Max-канал с правом публиковать сообщения.</li>
             <li>Нажмите «Проверить подключение ботов».</li>
-            <li>Создайте связь каналов и запустите ее.</li>
+            <li>Создайте связь каналов, при необходимости включите первичный перенос, затем запустите синхронизацию.</li>
           </ol>
           <div id="instructionTip" class="statusLine">
             Никаких сложных технических шагов не требуется.
+          </div>
+          <div class="statusLine" style="margin-top: 10px;">
+            Важно знать:
+            <ul class="infoList">
+              <li>Удаление постов пока не переносится.</li>
+              <li>Если пост в Telegram изменен, в Max будет добавлено новое сообщение с обновленным текстом.</li>
+              <li>Нужна помощь: Telegram <b>@hippo26</b>.</li>
+            </ul>
           </div>
         </div>
 
@@ -282,6 +301,21 @@
               <input id="targetChatInput" placeholder="-1234567890" />
             </div>
           </div>
+          <div class="row" style="margin-top: 10px;">
+            <div class="column">
+              <label style="font-weight: 500;">
+                <input id="runInitialImportCheckbox" type="checkbox" style="width: auto; margin-right: 8px;" />
+                Сделать первичный перенос старых постов
+              </label>
+            </div>
+            <div class="column">
+              <label>Режим первичного переноса</label>
+              <select id="initialImportModeSelect">
+                <option value="test">Ограниченный тест (5 свежих постов)</option>
+                <option value="full">Полный перенос</option>
+              </select>
+            </div>
+          </div>
           <div class="actionsRow" style="margin-top: 10px;">
             <button id="addChannelButton">Создать связь</button>
             <button id="refreshChannelsButton" class="secondaryButton">Обновить список</button>
@@ -303,6 +337,14 @@
             <button id="startLinkButton">Запустить</button>
             <button id="stopLinkButton" class="secondaryButton">Остановить</button>
             <button id="deleteLinkButton" class="dangerButton">Удалить</button>
+          </div>
+          <div class="actionsRow" style="margin-top: 10px;">
+            <button id="startInitialImportButton" class="secondaryButton">Запустить первичный перенос</button>
+            <button id="stopInitialImportButton" class="secondaryButton">Остановить первичный перенос</button>
+            <button id="refreshInitialImportStatusButton" class="secondaryButton">Обновить статус переноса</button>
+          </div>
+          <div id="initialImportStatusOutput" class="statusLine" style="margin-top: 10px;">
+            Статус первичного переноса появится после выбора связи.
           </div>
           <button id="validateBotAccessButton" class="secondaryButton" style="margin-top: 10px;">Проверить доступ бота</button>
           <div id="channelStatusOutput" class="statusLine" style="margin-top: 10px;"></div>

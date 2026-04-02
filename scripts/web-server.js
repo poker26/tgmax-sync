@@ -16,6 +16,7 @@ import {
   loadChannelStatusMetrics,
   listSyncJobLogsByUser,
   listSyncJobsByUser,
+  markStaleInitialImportRunsAsError,
   markChannelWebhookUpdateSeen,
   loadChannelSyncConfigByIdForUser,
   recordBotWebhookUpdate,
@@ -39,9 +40,18 @@ import {
 } from "../src/telegram/bot-api.js";
 import { getMaxBotMe } from "../src/max/api.js";
 import { startSyncEngine } from "../src/sync/engine.js";
+import {
+  createInitialImportManager,
+  resolveDefaultTg2maxProjectPath,
+} from "../src/sync/initial-import-runner.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.join(__dirname, "../web");
+const initialImportManager = createInitialImportManager({
+  logger: console,
+  tg2maxProjectPath:
+    config.initialImport.tg2maxProjectPath?.trim() || resolveDefaultTg2maxProjectPath(__dirname),
+});
 
 function sendError(response, statusCode, message) {
   response.status(statusCode).json({ ok: false, error: message });
@@ -285,9 +295,33 @@ function createApiServer() {
           targetChatId: createdConfig.target_chat_id,
         },
       });
-      response.status(201).json({ ok: true, channel: createdConfig });
+      const runInitialImport = Boolean(request.body?.runInitialImport);
+      const initialImportMode = String(request.body?.initialImportMode ?? "full").trim() === "test"
+        ? "test"
+        : "full";
+      let initialImportRun = null;
+      if (runInitialImport) {
+        initialImportRun = await initialImportManager.startImportForChannel({
+          userId: request.auth.user.id,
+          channelConfig: createdConfig,
+          mode: initialImportMode,
+        });
+      }
+      response.status(201).json({ ok: true, channel: createdConfig, initialImportRun });
     } catch (error) {
-      sendError(response, 400, error.message);
+      const rawMessage = String(error?.message ?? "");
+      if (
+        rawMessage.includes("uq_channel_sync_per_user") ||
+        rawMessage.toLowerCase().includes("duplicate key value")
+      ) {
+        sendError(
+          response,
+          409,
+          "Такая связь уже существует. Выберите другой Telegram-канал или другой Max-канал."
+        );
+        return;
+      }
+      sendError(response, 400, rawMessage);
     }
   });
 
@@ -637,6 +671,80 @@ function createApiServer() {
     }
   });
 
+  app.post(
+    "/api/channels/:channelId/initial-import/start",
+    requireAuthenticatedUser,
+    async (request, response) => {
+      try {
+        const channelConfig = await loadChannelSyncConfigByIdForUser(
+          request.auth.user.id,
+          request.params.channelId
+        );
+        if (!channelConfig) {
+          sendError(response, 404, "Channel config not found.");
+          return;
+        }
+        const initialImportMode = String(request.body?.mode ?? "full").trim() === "test" ? "test" : "full";
+        const startedRun = await initialImportManager.startImportForChannel({
+          userId: request.auth.user.id,
+          channelConfig,
+          mode: initialImportMode,
+        });
+        response.status(200).json({ ok: true, run: startedRun });
+      } catch (error) {
+        sendError(response, 400, error.message);
+      }
+    }
+  );
+
+  app.post(
+    "/api/channels/:channelId/initial-import/stop",
+    requireAuthenticatedUser,
+    async (request, response) => {
+      try {
+        const channelConfig = await loadChannelSyncConfigByIdForUser(
+          request.auth.user.id,
+          request.params.channelId
+        );
+        if (!channelConfig) {
+          sendError(response, 404, "Channel config not found.");
+          return;
+        }
+        const stopResult = await initialImportManager.stopImportForChannel({
+          userId: request.auth.user.id,
+          configId: channelConfig.id,
+        });
+        response.status(200).json({ ok: true, run: stopResult });
+      } catch (error) {
+        sendError(response, 400, error.message);
+      }
+    }
+  );
+
+  app.get(
+    "/api/channels/:channelId/initial-import/status",
+    requireAuthenticatedUser,
+    async (request, response) => {
+      try {
+        const channelConfig = await loadChannelSyncConfigByIdForUser(
+          request.auth.user.id,
+          request.params.channelId
+        );
+        if (!channelConfig) {
+          sendError(response, 404, "Channel config not found.");
+          return;
+        }
+        const importStatus = await initialImportManager.getImportStatusForChannel({
+          userId: request.auth.user.id,
+          configId: channelConfig.id,
+        });
+        response.status(200).json({ ok: true, run: importStatus });
+      } catch (error) {
+        sendError(response, 500, error.message);
+      }
+    }
+  );
+
   app.get("/", (request, response) => {
     response.sendFile(path.join(webRoot, "index.html"));
   });
@@ -646,6 +754,7 @@ function createApiServer() {
 }
 
 async function main() {
+  await markStaleInitialImportRunsAsError();
   const app = createApiServer();
   app.listen(config.web.port, () => {
     console.log(`[web] tgmax-sync web API listening on port ${config.web.port}`);

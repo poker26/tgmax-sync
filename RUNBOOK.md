@@ -55,6 +55,7 @@ WEB_SESSION_TTL_HOURS=72
 SYNC_SCHEDULER_INTERVAL_MS=10000
 SYNC_WORKER_CONCURRENCY=2
 SYNC_MAX_ATTEMPTS=8
+TG2MAX_PROJECT_PATH=/root/tg2max
 ```
 
 Каналы source/target не задаются в `.env`, добавляются пользователем через UI.
@@ -139,3 +140,43 @@ pm2 stop tgmax-sync-web
 ```
 
 После стабилизации — вернуть запуск и мониторинг.
+
+## 8) Перевод домена `tg2max.begemot.ru` на `tgmax-sync`
+
+1. Убедиться, что `tgmax-sync-web` работает на `WEB_PORT=3030`.
+2. Обновить nginx-конфиг домена `tg2max.begemot.ru`, чтобы `location /` проксировался на `127.0.0.1:3030`.
+
+Пример:
+
+```nginx
+server {
+    server_name tg2max.begemot.ru;
+
+    location / {
+        proxy_pass http://127.0.0.1:3030;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+3. Проверить и применить nginx:
+
+```bash
+nginx -t
+```
+
+```bash
+systemctl reload nginx
+```
+
+4. Проверить в браузере:
+
+- `https://tg2max.begemot.ru/`
+- вход в UI,
+- создание связи,
+- запуск первичного переноса (тестовый режим),
+- запуск постоянной синхронизации.

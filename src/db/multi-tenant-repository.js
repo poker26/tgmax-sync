@@ -9,6 +9,7 @@ const TABLE_SYNC_JOB_LOGS = "tg_sync_job_logs";
 const TABLE_SYNC_STATE = "tg_channel_sync_state";
 const TABLE_MESSAGE_MAP = "tg_channel_message_map";
 const TABLE_BOT_UPDATES = "tg_bot_updates_log";
+const TABLE_INITIAL_IMPORT_RUNS = "tg_initial_import_runs";
 
 function normalizeSourceChannelId(sourceChannelId) {
   const normalizedValue = String(sourceChannelId ?? "").trim();
@@ -472,6 +473,123 @@ export async function listActiveLegacyPollingConfigs() {
     .neq("source_type", "telegram_bot_channel");
   if (error) throw new Error(`legacy polling config list failed: ${error.message}`);
   return data ?? [];
+}
+
+export async function createInitialImportRun({ userId, configId, mode = "full" }) {
+  const { data, error } = await supabase
+    .from(TABLE_INITIAL_IMPORT_RUNS)
+    .insert({
+      user_id: userId,
+      channel_sync_config_id: configId,
+      mode,
+      status: "pending",
+      started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .select("*")
+    .single();
+  if (error) throw new Error(`initial_import_runs insert failed: ${error.message}`);
+  return data;
+}
+
+export async function markInitialImportRunStarted({ runId, processPid }) {
+  const { data, error } = await supabase
+    .from(TABLE_INITIAL_IMPORT_RUNS)
+    .update({
+      status: "running",
+      process_pid: processPid,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", runId)
+    .select("*")
+    .single();
+  if (error) throw new Error(`initial_import_runs start update failed: ${error.message}`);
+  return data;
+}
+
+export async function updateInitialImportRunProgress({ runId, progress = {}, logExcerpt = null }) {
+  const updatePayload = {
+    progress_json: progress,
+    updated_at: new Date().toISOString(),
+  };
+  if (typeof logExcerpt === "string") {
+    updatePayload.log_excerpt = logExcerpt.slice(-6000);
+  }
+  const { error } = await supabase
+    .from(TABLE_INITIAL_IMPORT_RUNS)
+    .update(updatePayload)
+    .eq("id", runId);
+  if (error) throw new Error(`initial_import_runs progress update failed: ${error.message}`);
+}
+
+export async function requestInitialImportRunCancel({ userId, configId }) {
+  const latestRun = await loadLatestInitialImportRunForConfig({ userId, configId });
+  if (!latestRun) return null;
+  if (!["pending", "running"].includes(latestRun.status)) {
+    return latestRun;
+  }
+  const { data, error } = await supabase
+    .from(TABLE_INITIAL_IMPORT_RUNS)
+    .update({
+      cancel_requested: true,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", latestRun.id)
+    .eq("user_id", userId)
+    .select("*")
+    .single();
+  if (error) throw new Error(`initial_import_runs cancel request failed: ${error.message}`);
+  return data;
+}
+
+export async function markInitialImportRunFinished({
+  runId,
+  status,
+  errorMessage = null,
+  progress = {},
+  logExcerpt = "",
+}) {
+  const { data, error } = await supabase
+    .from(TABLE_INITIAL_IMPORT_RUNS)
+    .update({
+      status,
+      error_message: errorMessage ? String(errorMessage).slice(0, 1000) : null,
+      finished_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      progress_json: progress,
+      log_excerpt: String(logExcerpt ?? "").slice(-6000),
+    })
+    .eq("id", runId)
+    .select("*")
+    .single();
+  if (error) throw new Error(`initial_import_runs finish update failed: ${error.message}`);
+  return data;
+}
+
+export async function loadLatestInitialImportRunForConfig({ userId, configId }) {
+  const { data, error } = await supabase
+    .from(TABLE_INITIAL_IMPORT_RUNS)
+    .select("*")
+    .eq("user_id", userId)
+    .eq("channel_sync_config_id", configId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`initial_import_runs select failed: ${error.message}`);
+  return data;
+}
+
+export async function markStaleInitialImportRunsAsError() {
+  const { error } = await supabase
+    .from(TABLE_INITIAL_IMPORT_RUNS)
+    .update({
+      status: "error",
+      error_message: "Процесс первичного переноса был прерван перезапуском сервиса.",
+      finished_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .in("status", ["pending", "running"]);
+  if (error) throw new Error(`initial_import_runs stale update failed: ${error.message}`);
 }
 
 export async function claimPendingJobs({ limit }) {

@@ -13,10 +13,15 @@ const selectedLinkTitle = document.getElementById("selectedLinkTitle");
 const linksEmptyState = document.getElementById("linksEmptyState");
 const logsChannelFilter = document.getElementById("logsChannelFilter");
 const registerButton = document.getElementById("registerButton");
+const initialImportStatusOutput = document.getElementById("initialImportStatusOutput");
+const runInitialImportCheckbox = document.getElementById("runInitialImportCheckbox");
+const initialImportModeSelect = document.getElementById("initialImportModeSelect");
 
 const state = {
   selectedLinkId: "",
   channels: [],
+  initialImportByChannel: {},
+  initialImportPollTimer: null,
 };
 
 function setStatus(element, text, statusType = "info") {
@@ -65,6 +70,12 @@ function toFriendlyError(error) {
   if (errorText.includes("unauthorized")) {
     return "Сессия истекла. Войдите заново.";
   }
+  if (errorText.includes("uq_tg_initial_import_run_active")) {
+    return "Первичный перенос уже запущен для этой связи.";
+  }
+  if (errorText.includes("eacces") || errorText.includes("enoent")) {
+    return "Не удалось запустить первичный перенос. Проверьте серверные настройки.";
+  }
   return "Операция не выполнена. Попробуйте еще раз.";
 }
 
@@ -89,21 +100,79 @@ function renderAuthState(isAuthenticated) {
   appPanel.classList.toggle("hidden", !isAuthenticated);
 }
 
+function getReadableChannelStatus(status) {
+  if (status === "active") return "Запущена";
+  if (status === "paused") return "Остановлена";
+  return "Отключена";
+}
+
+function getReadableInitialImportStatus(run) {
+  if (!run) {
+    return {
+      label: "Не запускался",
+      detail: "Первичный перенос можно запустить вручную.",
+      statusType: "info",
+      isActive: false,
+    };
+  }
+  if (run.status === "pending") {
+    return {
+      label: "В очереди",
+      detail: "Первичный перенос готовится к запуску.",
+      statusType: "info",
+      isActive: true,
+    };
+  }
+  if (run.status === "running") {
+    return {
+      label: "Выполняется",
+      detail: run.progress_json?.message || "Идет перенос постов в Max.",
+      statusType: "info",
+      isActive: true,
+    };
+  }
+  if (run.status === "done") {
+    return {
+      label: "Завершен",
+      detail: "Первичный перенос успешно завершен.",
+      statusType: "success",
+      isActive: false,
+    };
+  }
+  if (run.status === "cancelled") {
+    return {
+      label: "Остановлен",
+      detail: "Первичный перенос остановлен.",
+      statusType: "error",
+      isActive: false,
+    };
+  }
+  return {
+    label: "Ошибка",
+    detail: run.error_message || "Первичный перенос завершился с ошибкой.",
+    statusType: "error",
+    isActive: false,
+  };
+}
+
 function updateSelectedLinkPanel() {
   const selectedChannel = state.channels.find((channel) => channel.id === state.selectedLinkId);
   if (!selectedChannel) {
     setStatus(selectedLinkTitle, "Выберите связь из списка выше.");
+    setStatus(initialImportStatusOutput, "Статус первичного переноса появится после выбора связи.");
     return;
   }
-  const readableStatus =
-    selectedChannel.status === "active"
-      ? "Запущена"
-      : selectedChannel.status === "paused"
-        ? "Остановлена"
-        : "Отключена";
+  const readableStatus = getReadableChannelStatus(selectedChannel.status);
+  const importRun = state.initialImportByChannel[selectedChannel.id] || null;
+  const importStatus = getReadableInitialImportStatus(importRun);
   setStatus(
     selectedLinkTitle,
     `Выбрана связь: ${selectedChannel.source_channel_id} -> ${selectedChannel.target_chat_id}. Статус: ${readableStatus}.`
+  );
+  setStatus(
+    initialImportStatusOutput,
+    `Первичный перенос: ${importStatus.label}. ${importStatus.detail}`,
+    importStatus.statusType
   );
 }
 
@@ -134,6 +203,9 @@ function renderChannels() {
       <div class="linkTitle">${channel.source_channel_id} -> ${channel.target_chat_id}</div>
       <div class="linkMeta">Состояние: ${channel.status}</div>
       <div class="linkMeta">Доступ Telegram-бота: ${channel.bot_membership_status ?? "не проверен"}</div>
+      <div class="linkMeta">Первичный перенос: ${
+        getReadableInitialImportStatus(state.initialImportByChannel[channel.id] || null).label
+      }</div>
     `;
     channelCard.addEventListener("click", () => {
       selectLink(channel.id);
@@ -145,6 +217,27 @@ function renderChannels() {
     logsChannelFilter.value = previousFilterValue;
   }
   updateSelectedLinkPanel();
+}
+
+function clearInitialImportPolling() {
+  if (state.initialImportPollTimer) {
+    clearInterval(state.initialImportPollTimer);
+    state.initialImportPollTimer = null;
+  }
+}
+
+function scheduleInitialImportPolling() {
+  clearInitialImportPolling();
+  state.initialImportPollTimer = setInterval(async () => {
+    if (!state.selectedLinkId) {
+      return;
+    }
+    const importRun = state.initialImportByChannel[state.selectedLinkId] || null;
+    if (!importRun || !["pending", "running"].includes(importRun.status)) {
+      return;
+    }
+    await refreshInitialImportStatus(state.selectedLinkId, { silent: true });
+  }, 4000);
 }
 
 async function loadBootstrapStatus() {
@@ -211,20 +304,25 @@ async function loadChannels() {
   if (!state.selectedLinkId && state.channels.length > 0) {
     state.selectedLinkId = state.channels[0].id;
   }
-
+  await loadInitialImportStatusesForChannels();
   renderChannels();
+  scheduleInitialImportPolling();
 }
 
 async function createLink() {
   try {
     const sourceChannelId = document.getElementById("sourceChannelInput").value.trim();
     const targetChatId = document.getElementById("targetChatInput").value.trim();
+    const runInitialImport = Boolean(runInitialImportCheckbox.checked);
+    const initialImportMode = initialImportModeSelect.value === "test" ? "test" : "full";
 
     const createResponse = await apiRequest("/api/channels", {
       method: "POST",
       body: JSON.stringify({
         sourceChannelId,
         targetChatId,
+        runInitialImport,
+        initialImportMode,
       }),
     });
 
@@ -238,14 +336,21 @@ async function createLink() {
         connectResponse.botStatus === "connected"
           ? "Доступ бота подтвержден."
           : "Связь создана, но доступ Telegram-бота нужно проверить.";
-      setStatus(addChannelOutput, `Связь успешно создана. ${botStatusText}`, "success");
+      const importHint = runInitialImport
+        ? "Первичный перенос запущен в фоне."
+        : "Первичный перенос можно запустить позже вручную.";
+      setStatus(addChannelOutput, `Связь успешно создана. ${botStatusText} ${importHint}`, "success");
       state.selectedLinkId = newChannelId;
+      if (createResponse.initialImportRun) {
+        state.initialImportByChannel[newChannelId] = createResponse.initialImportRun;
+      }
     } else {
       setStatus(addChannelOutput, "Связь создана.", "success");
     }
 
     await loadChannels();
     await loadLogs();
+    scheduleInitialImportPolling();
   } catch (error) {
     setStatus(addChannelOutput, toFriendlyError(error), "error");
   }
@@ -254,6 +359,7 @@ async function createLink() {
 function selectLink(linkId) {
   state.selectedLinkId = linkId;
   renderChannels();
+  scheduleInitialImportPolling();
 }
 
 async function setSelectedLinkStatus(nextStatus) {
@@ -310,11 +416,91 @@ async function deleteSelectedLink() {
   try {
     await apiRequest(`/api/channels/${state.selectedLinkId}`, { method: "DELETE" });
     setStatus(channelStatusOutput, "Связь удалена.", "success");
+    delete state.initialImportByChannel[state.selectedLinkId];
     state.selectedLinkId = "";
     await loadChannels();
     await loadLogs();
   } catch (error) {
     setStatus(channelStatusOutput, toFriendlyError(error), "error");
+  }
+}
+
+async function refreshInitialImportStatus(channelId, { silent = false } = {}) {
+  if (!channelId) return null;
+  try {
+    const statusResponse = await apiRequest(`/api/channels/${channelId}/initial-import/status`, {
+      method: "GET",
+    });
+    state.initialImportByChannel[channelId] = statusResponse.run || null;
+    if (!silent) {
+      const importStatus = getReadableInitialImportStatus(statusResponse.run || null);
+      setStatus(
+        initialImportStatusOutput,
+        `Первичный перенос: ${importStatus.label}. ${importStatus.detail}`,
+        importStatus.statusType
+      );
+    }
+    renderChannels();
+    return statusResponse.run || null;
+  } catch (error) {
+    if (!silent) {
+      setStatus(initialImportStatusOutput, toFriendlyError(error), "error");
+    }
+    return null;
+  }
+}
+
+async function loadInitialImportStatusesForChannels() {
+  const tasks = state.channels.map(async (channel) => {
+    const statusResponse = await apiRequest(`/api/channels/${channel.id}/initial-import/status`, {
+      method: "GET",
+    });
+    state.initialImportByChannel[channel.id] = statusResponse.run || null;
+  });
+  await Promise.all(tasks);
+}
+
+async function startSelectedInitialImport() {
+  if (!state.selectedLinkId) {
+    setStatus(initialImportStatusOutput, "Сначала выберите связь.", "error");
+    return;
+  }
+  try {
+    const selectedMode = initialImportModeSelect.value === "test" ? "test" : "full";
+    const startResponse = await apiRequest(
+      `/api/channels/${state.selectedLinkId}/initial-import/start`,
+      {
+        method: "POST",
+        body: JSON.stringify({ mode: selectedMode }),
+      }
+    );
+    state.initialImportByChannel[state.selectedLinkId] = startResponse.run || null;
+    setStatus(initialImportStatusOutput, "Первичный перенос запущен.", "success");
+    renderChannels();
+    scheduleInitialImportPolling();
+  } catch (error) {
+    setStatus(initialImportStatusOutput, toFriendlyError(error), "error");
+  }
+}
+
+async function stopSelectedInitialImport() {
+  if (!state.selectedLinkId) {
+    setStatus(initialImportStatusOutput, "Сначала выберите связь.", "error");
+    return;
+  }
+  try {
+    const stopResponse = await apiRequest(
+      `/api/channels/${state.selectedLinkId}/initial-import/stop`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      }
+    );
+    state.initialImportByChannel[state.selectedLinkId] = stopResponse.run || null;
+    setStatus(initialImportStatusOutput, "Запрошена остановка первичного переноса.", "success");
+    renderChannels();
+  } catch (error) {
+    setStatus(initialImportStatusOutput, toFriendlyError(error), "error");
   }
 }
 
@@ -355,6 +541,7 @@ async function logout() {
     // intentionally ignored to allow local session cleanup
   }
   setToken("");
+  clearInitialImportPolling();
   renderAuthState(false);
 }
 
@@ -373,8 +560,10 @@ async function tryRestoreSession() {
     await checkConnections();
     await loadChannels();
     await loadLogs();
+    scheduleInitialImportPolling();
   } catch {
     setToken("");
+    clearInitialImportPolling();
     renderAuthState(false);
   }
 }
@@ -423,6 +612,15 @@ document.getElementById("refreshChannelsButton").addEventListener("click", loadC
 document.getElementById("startLinkButton").addEventListener("click", async () => setSelectedLinkStatus("active"));
 document.getElementById("stopLinkButton").addEventListener("click", async () => setSelectedLinkStatus("paused"));
 document.getElementById("deleteLinkButton").addEventListener("click", deleteSelectedLink);
+document
+  .getElementById("startInitialImportButton")
+  .addEventListener("click", startSelectedInitialImport);
+document
+  .getElementById("stopInitialImportButton")
+  .addEventListener("click", stopSelectedInitialImport);
+document
+  .getElementById("refreshInitialImportStatusButton")
+  .addEventListener("click", async () => refreshInitialImportStatus(state.selectedLinkId));
 document
   .getElementById("validateBotAccessButton")
   .addEventListener("click", validateSelectedLinkBotAccess);
